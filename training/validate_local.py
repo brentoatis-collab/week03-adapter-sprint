@@ -175,12 +175,14 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as td:
         tmp = Path(td) / "log.csv"
         shutil.copy(log_path, tmp)
-        header_line = tmp.read_text()
+        before = tmp.read_text()               # header + any real rows already logged
+        n_before = len(before.splitlines())
         C.append_experiment_log({"run_id": "LOGGER-SELFTEST", "status": "logger_selftest"}, tmp)
         C.append_experiment_log({"run_id": "LOGGER-SELFTEST-2", "status": "logger_selftest"}, tmp)
         lines = tmp.read_text().splitlines()
-        check("logger appends without rewriting header",
-              tmp.read_text().startswith(header_line) and len(lines) == 3, f"{len(lines)} lines in temp log")
+        check("logger appends without rewriting existing rows",
+              tmp.read_text().startswith(before) and len(lines) == n_before + 2,
+              f"{n_before} -> {len(lines)} lines in temp log")
         expect_raises("logger rejects unknown columns", KeyError,
                       lambda: C.append_experiment_log({"run_id": "x", "fake_metric": 1}, tmp))
 

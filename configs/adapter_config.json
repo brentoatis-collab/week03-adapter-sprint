@@ -81,6 +81,14 @@
     "eval_street_wide_families_min": 1,
     "street_only_actionable_min": {"train": 2, "eval": 2},
     "n_preference_examples": 150,
+    "preference_seed": 42,
+    "preference_mix": {
+      "fabricated_address": 36,
+      "fabricated_address_and_location": 24,
+      "over_null": 60,
+      "altered_address": 30,
+      "_comment": "A+B (60) = no-address complaints, rejected invents an address; C (60) = exact-address controls, rejected returns null; D (30) = exact-address controls, rejected alters the house number. Null appears in 60 chosen and 60 rejected responses so null alone carries no preference signal."
+    },
     "_comment": "Split is by scenario FAMILY (whole families go to one side) and stratified: 5 eval examples per category, 4 eval examples per no-address location condition (6 conditions -> 24 eval no-address). Overall no-address = 6 x (6 + 4) = 60 / 400 = 15%.",
     "instruction_train_path": "data/instruction_train.jsonl",
     "instruction_eval_path": "data/instruction_eval.jsonl",

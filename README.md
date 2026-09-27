@@ -2,7 +2,7 @@
 
 **LoRA/QLoRA instruction tuning and DPO under a 15 GB GPU memory ceiling**
 
-> **Status:** Build Step 3 (QLoRA training code + local CPU validation). No GPU training has been run yet.
+> **Status:** Build Step 4 (DPO preference dataset + audit). Only a 5-step QLoRA smoke run has been executed on GPU; no full SFT or DPO training yet.
 > Every result field in this README is empty until it is filled from real Colab execution.
 
 ---
@@ -378,12 +378,116 @@ built, and a missing target is a hard error with no substitution.
 - Every CUDA run, successful or failed, appends one row to `logs/experiment_log.csv`.
 - Without CUDA, memory fields are recorded as `NA_no_cuda`, never as numbers.
 
+### 7.3 DPO preference dataset (Step 4)
+
+**Files.**
+- [scripts/generate_preferences.py](scripts/generate_preferences.py) is the deterministic
+  generator (seed 42).
+- [scripts/audit_preference_data.py](scripts/audit_preference_data.py) is the audit and
+  shortcut diagnostic.
+- [data/preference_train.jsonl](data/preference_train.jsonl) holds the 150 pairs.
+
+**Construction.**
+- Each pair is one resident complaint, a **chosen** ticket and a **rejected** ticket.
+- Chosen is the canonical contract-correct ticket, produced by the same rendering code as the
+  frozen instruction dataset.
+- Complaints are rendered only from the **60 training scenario families**. None of the 24
+  held-out eval families is used. No prompt duplicates an instruction complaint, and the
+  closest preference prompt to any eval complaint has char-4gram Jaccard similarity 0.404.
+- **Category, urgency and summary are identical** between chosen and rejected in every pair.
+  The pairs differ **only** in address handling:
+
+| Pair type | n | Complaint | Chosen | Rejected | Fields that differ |
+|---|---|---|---|---|---|
+| `fabricated_address` | 36 | no exact address | `address_or_null: null` | a plausible invented address | `address_or_null` |
+| `fabricated_address_and_location` | 24 | no exact address | null + supplied location | the invented address in both fields | `address_or_null`, `location` |
+| `over_null` (control) | 60 | exact address | the resident's address | `null` | `address_or_null` |
+| `altered_address` (control) | 30 | exact address | the resident's address | the house number changed (same length) | `address_or_null`, `location` |
+
+The 60 no-address pairs cover 10 of each no-address condition: intersection, landmark, block
+range, street only (5 street-wide/actionable, 5 point/clarification), vague and missing.
+
+**How rejected addresses are fabricated.** They are built the way a model would hallucinate
+them:
+- a house number attached to a street the resident mentioned
+- a number inside a stated block range ("1200 block of Highland Avenue" → "1277 Highland")
+- an invented street when nothing usable was supplied
+
+Fabricated addresses use the same house-number and street-suffix distributions as real
+resident addresses, including no suffix, so they cannot be spotted by their form.
+
+**Why the control pairs are necessary.** If every pair rewarded `null` over an address, DPO
+could lower its loss by learning "never output an address". That is the over-conservative
+failure the evaluation explicitly checks for. The `over_null` controls reward keeping a real
+address. The `altered_address` controls reward copying it exactly rather than producing any
+plausible number. Together they make the preference decidable only by checking the response
+against the complaint.
+
+**Null balance: 60 / 60.** `null` appears in exactly 60 chosen responses (types A+B) and 60
+rejected responses (type C). The fixed rule "the response with a null address is chosen"
+therefore scores exactly 0.500.
+
+**Length balance** (rejected minus chosen):
+
+| Unit | Mean difference | Rejected longer / shorter / equal |
+|---|---|---|
+| characters | −2.97 (ratio range 0.88–1.09; 0 pairs beyond ±15%) | 44 / 76 / 30 |
+| words | −0.31 | 42 / 72 / 36 |
+| Qwen tokens | −0.15 | 59 / 60 / 31 |
+
+**Shortcut diagnostic.** The diagnostic asks whether chosen can be told apart from rejected
+using the *response alone*, without reading the complaint. It uses 10 surface features
+(character, word and token length; digit count; null flag; location form; suffix;
+clarification sentence) and three kinds of classifier:
+- pointwise single-feature stumps and logistic regression
+- pairwise-difference stumps and logistic regression, each with 5-fold cross-validation grouped
+  by pair
+- fixed pairwise rules
+
+**Thresholds were set before any data was generated: warn ≥ 0.60, stop ≥ 0.70.**
+
+| Warning | Accuracy | Status |
+|---|---|---|
+| pointwise digit-count stump | **0.663** (highest observed) | warning, below the 0.70 stop threshold |
+| pairwise character-length-difference stump | 0.620 | warning |
+| pairwise logistic regression on feature differences | 0.620 | warning |
+| fixed rule "longer response (chars) is chosen" | 0.607 | warning |
+
+All other response-only classifiers and rules score 0.39–0.58, including the all-feature
+pointwise logistic regression at 0.560. The lowest is "shorter response (chars) is chosen" at
+0.393, the mirror image of the 0.607 rule. For contrast, the rule that reads the complaint ("choose the
+response whose `address_or_null` is supported by the complaint") scores 150/150.
+
+**Known risks, accepted and documented (not reworked):**
+
+1. **Digit-count signal (0.663).** Every rejected response contains digits, because every error
+   type places an address somewhere, so 0 of 150 rejected responses are digit-free. 49 of 150
+   chosen responses are digit-free: the 60 no-address chosen responses minus 11 whose location
+   contains a number, such as a block range or "Fire Station 7".
+   This is **below the predefined 0.70 stop threshold but remains a potential spurious
+   preference signal.** It could nudge DPO toward digit-free (null-address, non-numeric
+   location) outputs. Within a pair, "fewer digits is chosen" is right exactly as often as it
+   is wrong (60 / 60 with 30 ties), and the controls push against the drift. Neither fact
+   removes the risk. The held-out over-conservative null rate (§9) is the measurement that
+   will show whether it materialized.
+2. **Character-length signal (0.607–0.620).** Controls where rejected is `null` make the chosen
+   response longer in characters. Token-level length is balanced (59 / 60), and DPO
+   likelihoods are sums over tokens. **That does not show the risk is eliminated:** a
+   character-level difference still correlates with *which content* is present (an address
+   string versus `null`). The risk is recorded, not dismissed.
+
+**No held-out preference split.** All 150 pairs train DPO. Any DPO reward accuracy or reward
+margin computed on these pairs is **training-set reward accuracy**. It says how well the
+objective was fitted, not how well the model generalizes, and it is never reported as held-out
+accuracy. Generalization is assessed only by the held-out three-way (base vs SFT vs DPO)
+behavioral evaluation on the frozen eval set (§9).
+
 | Topic | Status |
 |---|---|
 | Instruction dataset design + audit | done (see 7.1) |
 | Chat template + assistant-only loss masking | done, verified locally (see 7.2) |
-| Memory/time instrumentation | implemented; **no measurements yet** (needs Colab) |
-| Preference dataset design + shortcut audit | *Step 4* |
+| Memory/time instrumentation | exercised in the 5-step T4 smoke run (`logs/experiment_log.csv`); no full-run measurements yet |
+| Preference dataset design + shortcut audit | done (see 7.3) |
 | DPO (β = 0.1; reference = frozen SFT adapter, **not** the adapter-disabled base) | *Step 5* |
 | Evaluation methodology | *Step 6* |
 
