@@ -2,7 +2,7 @@
 
 **LoRA/QLoRA instruction tuning and DPO under a 15 GB GPU memory ceiling**
 
-> **Status:** Build Step 1 (specification + configuration). No training has been run yet.
+> **Status:** Build Step 2 (instruction dataset generated + audited). No training has been run yet.
 > Every result field in this README is empty until it is filled from real Colab execution.
 
 ---
@@ -54,7 +54,7 @@ The keys appear in this **fixed order**:
 | `category` | string (enum) | Exactly one slug from §3.2. For a multi-issue complaint, use the **primary** issue (the one with the highest urgency; if tied, the first one mentioned). Secondary issues are mentioned in `summary`. |
 | `urgency` | string (enum) | Exactly one level from §3.3. |
 | `location` | string | The most specific location **stated by the resident**: address, intersection, landmark, or partial description, with light cleanup (casing, obvious typos). If the resident gives no location at all: `"unspecified"`. |
-| `summary` | string | A neutral restatement of the issue in 1–2 sentences. It contains **only facts present in the complaint**. If there is no exact address, add: *"Location clarification required."* |
+| `summary` | string | A neutral restatement of the issue in 1–2 sentences, **using only facts present in the complaint**. A secondary issue is added as *"Also reports …"*. The sentence *"Location clarification required."* is added **only** when a dispatcher could not reasonably locate the issue (§3.5). |
 | `address_or_null` | string or `null` | **Only a house number plus a street name** (for example `"1423 Elm St"`) and only if the resident wrote one. Otherwise JSON `null`. |
 
 ### 3.2 What counts as an address (decision C)
@@ -62,13 +62,16 @@ The keys appear in this **fixed order**:
 `address_or_null` is non-null **only** when the complaint contains a house/building number
 **and** a street name.
 
-| Resident wrote | `location` | `address_or_null` |
-|---|---|---|
-| "in front of 1423 elm st" | `"1423 Elm St"` | `"1423 Elm St"` |
-| "corner of Oak and 5th" | `"Oak and 5th (intersection)"` | `null` |
-| "by the Riverside library" | `"near Riverside Library"` | `null` |
-| "somewhere on Maple" | `"Maple (exact block unknown)"` | `null` |
-| "the usual spot, you know" | `"unspecified"` | `null` |
+| Resident wrote | `location` | `address_or_null` | Clarification? |
+|---|---|---|---|
+| "in front of 1423 elm st" | `"1423 Elm St"` | `"1423 Elm St"` | no |
+| "corner of Oak and 5th" | `"Oak and 5th (intersection)"` | `null` | no (actionable) |
+| "behind Riverside Library" | `"behind Riverside Library"` | `null` | no (actionable) |
+| "the 400 block of pine st" | `"400 block of Pine St"` | `null` | no (actionable) |
+| "somewhere on Maple Ave" (one pothole) | `"Maple Ave (no house number given)"` | `null` | **yes** (point issue on a whole street) |
+| "on Maple Ave" (street never plowed) | `"Maple Ave (no house number given)"` | `null` | no (the issue covers the whole street) |
+| "by my place" | `"near resident's home (exact location unclear)"` | `null` | **yes** |
+| *(no location at all)* | `"unspecified"` | `null` | **yes** |
 
 Intersections, landmarks, block ranges ("the 400 block of Pine") and street-only mentions
 **are not exact addresses**. The address is copied from the complaint with casing normalized.
@@ -108,8 +111,14 @@ Urgency is never raised based on things the resident did not say.
 
 1. Never invent a street address, house number, cross street, landmark, date, time, vehicle
    plate, or person's name.
-2. If the resident's location is vague, say so (`location` reflects the vagueness, and
-   `summary` includes "Location clarification required.") rather than resolving it.
+2. **Clarification is about actionability, not about the address.** A `null` address does
+   **not** by itself trigger "Location clarification required." Intersections, named
+   landmarks and block ranges are actionable. A street name alone is actionable only for a
+   street-wide issue (unplowed or unsalted street, whole-street missed collection, faded lane
+   lines, racing along the street). Clarification is required for vague locations, missing
+   locations, and point issues given only a street name. The model must not learn
+   `address_or_null == null → ask for clarification`.
+   A vague location is recorded as the resident described it, never resolved.
 3. Ignore irrelevant detail (personal anecdotes, complaints about the city in general) unless it
    changes the category or urgency.
 4. Being over-conservative is also a failure: if a valid house number + street **is** present,
@@ -209,9 +218,60 @@ sequence are about 0.3 GB. Section 8 interprets the results with that in mind.
 
 ## 7. Method details (filled in as each step is built)
 
+### 7.1 Instruction dataset design (Step 2)
+
+**Generation.** [scripts/generate_instruction_data.py](scripts/generate_instruction_data.py) is
+deterministic Python (seed 42) with no LLM API. It builds each complaint from:
+
+- **84 scenario families** (7 per category). A family is one underlying issue, such as "deep
+  pothole", with 2–3 paraphrased issue clauses and a short terse form.
+- **Criteria-driven urgency.** Each issue and each optional context clause carries §3.4
+  criteria *facts* (`COSMETIC`, `QUALITY_OF_LIFE`, `HAZARD_SOON`, `SERVICE_LOSS`,
+  `IMMEDIATE_DANGER`, `ACTIVE_DAMAGE`). The label is the highest-ranked fact present. The same
+  family therefore appears at several urgency levels ("pothole" is medium; "pothole + cars
+  swerving into traffic" is high). Context clauses are restricted to issues where they make
+  causal sense (a hairline crack is never escalated by "lots of foot traffic").
+- **Decoupled resident urgency claims** ("URGENT!!", "no rush", "not a big deal") are
+  injected independently of the label, so urgency cannot be solved by keyword lookup.
+- **Seven location conditions**, each with its own rendering and normalization (§3.2).
+- **Surface variety:** styles (standard, terse, verbose, typo-heavy, slang, formal,
+  shouting), 18 sentence frames, greetings and sign-offs, irrelevant detail, typos, dropped
+  apostrophes and punctuation, and casing changes.
+- **Multi-issue complaints** (about 9%): a second issue from another category. The ticket's
+  category is the more urgent issue (ties go to the first one mentioned), and the other issue
+  appears as "Also reports …".
+- **Location protection.** Typo and slang noise never touches location text; only its casing
+  changes. The target address is therefore always a verbatim, casing-normalized copy of what
+  the resident typed. It is never repaired or completed.
+
+Each JSONL record stores the complaint, the target `response` (a JSON string in the fixed key
+order), and audit metadata: `family_id`, `location_type`, `needs_clarification`, `context`,
+`style`, `frame`, and `noise`. The chat template and system prompt are applied later, in
+`training/common.py`.
+
+**Split procedure (deterministic, stratified, leakage-free):**
+
+1. For each category, shuffle its 7 families with `random.Random(42)`. **2 families per
+   category go entirely to eval** (24 eval families) and the other 5 to train (60 families).
+   No underlying issue appears on both sides. Secondary issues in multi-issue complaints are
+   drawn only from the same side's families.
+2. Eval gets 60 examples (5 per category) and train gets 340.
+3. No-address conditions are assigned by stratified quota: **4 per condition in eval (24)**
+   and 6 per condition in train (36). That is 60/400 = 15.0% overall, but 40% of eval, so the
+   primary safety metric is not computed on about 9 random cases.
+4. The audit verifies: no family overlap; no eval issue paraphrase appearing verbatim in
+   train; no exact duplicate complaints; eval-to-train near-duplicate similarity below 0.70
+   (char-4gram Jaccard); and byte-identical regeneration under a different `PYTHONHASHSEED`.
+
+The eval set **deliberately over-represents** no-address cases relative to train. That is
+intentional for measuring safety, and it means aggregate eval accuracy should not be read as
+an estimate of production accuracy.
+
+**Audit.** Run `python scripts/audit_instruction_data.py` (exit code 1 on any hard failure).
+
 | Topic | Status |
 |---|---|
-| Instruction dataset design + audit | *Step 2* |
+| Instruction dataset design + audit | done (see 7.1) |
 | Chat template + assistant-only loss masking (decision E: plain HF `Trainer`, explicit `-100` masking, `<\|im_end\|>` included in the trained region) | *Step 3* |
 | Memory/time instrumentation (`torch.cuda.reset_peak_memory_stats`, `max_memory_allocated`, `max_memory_reserved`, wall clock, per-step time) | *Step 3* |
 | Preference dataset design + shortcut audit | *Step 4* |

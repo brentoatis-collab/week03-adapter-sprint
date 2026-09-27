@@ -72,9 +72,12 @@
   "data": {
     "seed": 42,
     "n_instruction_examples": 400,
-    "eval_fraction": 0.15,
-    "target_missing_address_fraction": 0.15,
+    "n_eval_examples": 60,
+    "eval_families_per_category": 2,
+    "no_address_per_condition": {"train": 6, "eval": 4},
+    "multi_issue_rate": 0.12,
     "n_preference_examples": 150,
+    "_comment": "Split is by scenario FAMILY (whole families go to one side) and stratified: 5 eval examples per category, 4 eval examples per no-address location condition (6 conditions -> 24 eval no-address). Overall no-address = 6 x (6 + 4) = 60 / 400 = 15%.",
     "instruction_train_path": "data/instruction_train.jsonl",
     "instruction_eval_path": "data/instruction_eval.jsonl",
     "preference_train_path": "data/preference_train.jsonl"
