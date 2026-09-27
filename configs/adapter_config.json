@@ -1,0 +1,93 @@
+{
+  "_comment": "Baseline experiment configuration. These are starting values for ONE controlled experiment, not claimed optima. Training scripts load this file and allow CLI overrides; every run logs the effective values actually used.",
+
+  "model": {
+    "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+    "requires_hf_auth": false,
+    "trust_remote_code": false,
+    "attn_implementation": "sdpa",
+    "_comment": "Apache-2.0, ungated. Qwen2ForCausalLM (native in transformers). SDPA because FlashAttention-2 does not support the T4 (sm_75)."
+  },
+
+  "quantization": {
+    "load_in_4bit": true,
+    "bnb_4bit_quant_type": "nf4",
+    "bnb_4bit_use_double_quant": true,
+    "bnb_4bit_compute_dtype": "float16",
+    "_comment": "QLoRA demonstration: NF4 frozen base weights + double quantization. Compute dtype is float16 because the T4 has no bf16 support. A 0.5B model does NOT require 4-bit to fit on a T4; quantization is used to demonstrate the technique under the assignment constraint."
+  },
+
+  "lora": {
+    "r": 16,
+    "lora_alpha": 32,
+    "lora_dropout": 0.05,
+    "bias": "none",
+    "task_type": "CAUSAL_LM",
+    "target_module_candidates": ["q_proj", "k_proj", "v_proj", "o_proj"],
+    "_comment": "Candidates only. train_qlora.py inspects the loaded model, prints every Linear/Linear4bit module name, and builds target_modules from candidates that actually exist. Any missing candidate is a hard error. Baseline = attention projections only (decision F); adding MLP projections would be a separate single-variable run."
+  },
+
+  "sft": {
+    "max_seq_length": 512,
+    "micro_batch_size": 4,
+    "gradient_accumulation_steps": 4,
+    "gradient_checkpointing": true,
+    "learning_rate": 2e-4,
+    "lr_scheduler_type": "cosine",
+    "warmup_ratio": 0.1,
+    "num_train_epochs": 3,
+    "weight_decay": 0.0,
+    "max_grad_norm": 0.3,
+    "optim": "adamw_torch",
+    "fp16": true,
+    "bf16": false,
+    "logging_steps": 5,
+    "seed": 42,
+    "output_dir": "outputs/qlora_sft",
+    "_comment": "Effective batch = micro_batch_size x gradient_accumulation_steps = 16. lr 2e-4 and max_grad_norm 0.3 follow common QLoRA practice. optim adamw_torch: optimizer state for ~2M adapter params is only a few MB, so paged 8-bit optimizers are not needed at baseline."
+  },
+
+  "dpo": {
+    "beta": 0.1,
+    "learning_rate": 5e-5,
+    "num_train_epochs": 1,
+    "micro_batch_size": 2,
+    "gradient_accumulation_steps": 8,
+    "gradient_checkpointing": true,
+    "max_length": 512,
+    "lr_scheduler_type": "cosine",
+    "warmup_ratio": 0.1,
+    "max_grad_norm": 0.3,
+    "fp16": true,
+    "bf16": false,
+    "logging_steps": 2,
+    "seed": 42,
+    "sft_adapter_dir": "outputs/qlora_sft/final_adapter",
+    "output_dir": "outputs/dpo",
+    "model_adapter_name": "train",
+    "ref_adapter_name": "reference",
+    "_comment": "Short DPO pass after SFT. Reference = the frozen SFT adapter loaded a second time under ref_adapter_name, NOT the adapter-disabled base model. Values here will be mapped onto the pinned trl==1.14.0 DPOConfig; the mapping is verified when train_dpo.py is written (Step 5)."
+  },
+
+  "data": {
+    "seed": 42,
+    "n_instruction_examples": 400,
+    "eval_fraction": 0.15,
+    "target_missing_address_fraction": 0.15,
+    "n_preference_examples": 150,
+    "instruction_train_path": "data/instruction_train.jsonl",
+    "instruction_eval_path": "data/instruction_eval.jsonl",
+    "preference_train_path": "data/preference_train.jsonl"
+  },
+
+  "evaluation": {
+    "do_sample": false,
+    "max_new_tokens": 192,
+    "seed": 42,
+    "_comment": "Greedy decoding so the three models are compared on identical, deterministic inputs."
+  },
+
+  "logging": {
+    "experiment_log_path": "logs/experiment_log.csv"
+  }
+}

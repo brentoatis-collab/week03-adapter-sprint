@@ -1,0 +1,29 @@
+# Week 03 Adapter Sprint — pinned dependency stack
+#
+# Strategy
+# --------
+# * The Hugging Face training stack is pinned EXACTLY. Training code is written
+#   against these versions' APIs; do not upgrade one package in isolation.
+#   The set below was checked with pip's resolver for Linux x86_64 / Python 3.12
+#   (the Colab platform) on 2026-09-27 and resolves without conflicts.
+# * torch is deliberately NOT pinned exactly. Colab ships a CUDA build of torch
+#   matched to its driver; reinstalling torch there is slow and can break CUDA.
+#   The range below is the constraint required by bitsandbytes. The notebook
+#   prints the actual torch/CUDA versions and GPU compute capability
+#   (T4 = sm_75), and every experiment-log row records them.
+# * Install in Colab with:  pip install -r requirements.txt
+#   then RESTART the runtime before importing bitsandbytes.
+
+# --- Core (torch is provided by Colab; constraint only) ---
+torch>=2.4,<3
+
+# --- Hugging Face training stack (exact pins; mutually resolved) ---
+transformers==5.17.0
+peft==0.21.0
+trl==1.14.0
+bitsandbytes==0.50.2
+accelerate==1.15.0
+datasets==5.0.1
+
+# --- Analysis / logging ---
+pandas>=2.2
