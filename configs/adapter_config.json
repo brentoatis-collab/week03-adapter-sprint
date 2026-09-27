@@ -76,6 +76,8 @@
     "eval_families_per_category": 2,
     "no_address_per_condition": {"train": 6, "eval": 4},
     "multi_issue_rate": 0.12,
+    "eval_street_wide_families_min": 1,
+    "street_only_actionable_min": {"train": 2, "eval": 2},
     "n_preference_examples": 150,
     "_comment": "Split is by scenario FAMILY (whole families go to one side) and stratified: 5 eval examples per category, 4 eval examples per no-address location condition (6 conditions -> 24 eval no-address). Overall no-address = 6 x (6 + 4) = 60 / 400 = 15%.",
     "instruction_train_path": "data/instruction_train.jsonl",

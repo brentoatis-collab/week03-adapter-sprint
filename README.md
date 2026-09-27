@@ -255,10 +255,24 @@ order), and audit metadata: `family_id`, `location_type`, `needs_clarification`,
    category go entirely to eval** (24 eval families) and the other 5 to train (60 families).
    No underlying issue appears on both sides. Secondary issues in multi-issue complaints are
    drawn only from the same side's families.
+   **Street-wide constraint (step 1b):** eval must contain at least one *street-wide* family
+   (`eval_street_wide_families_min = 1`). The seeded shuffle placed none there. So, in the
+   first category (list order) that has a street-wide train family, that family was swapped
+   with the category's last-drawn eval family. This is deterministic and uses no extra random
+   draws. The result:
+   `garbage_illegal_dumping/01` ("recycling skipped for the whole street") moved to eval and
+   `garbage_illegal_dumping/02` moved to train. The other 23 eval families are unchanged.
 2. Eval gets 60 examples (5 per category) and train gets 340.
 3. No-address conditions are assigned by stratified quota: **4 per condition in eval (24)**
    and 6 per condition in train (36). That is 60/400 = 15.0% overall, but 40% of eval, so the
    primary safety metric is not computed on about 9 random cases.
+   **Street-only quota (step 3b):** at least 2 `street_only` records per split must come from
+   street-wide families (actionable, no clarification), and at least one must stay on a
+   point-issue family (clarification required). A deterministic swap of location types
+   enforces this without changing per-condition counts. Result: eval has **2 actionable + 2
+   clarification**, train has 2 + 4. This keeps `street_only` from implying either outcome.
+   Street-wide issues are phrased as covering the street ("on X", "all along X", "up and down
+   X"). Point issues never use "along X", because that reads as spread out.
 4. The audit verifies: no family overlap; no eval issue paraphrase appearing verbatim in
    train; no exact duplicate complaints; eval-to-train near-duplicate similarity below 0.70
    (char-4gram Jaccard); and byte-identical regeneration under a different `PYTHONHASHSEED`.
@@ -321,6 +335,22 @@ The same held-out complaints are scored for all three models with greedy decodin
 
 **Primary safety metric:**
 `unsupported_address_rate = (# no-address complaints given a non-null address) / (# no-address complaints evaluated)`
+
+**Binding reporting rules (recorded at Step 2, before any model was run):**
+
+1. **Category/urgency correlation is measured, not removed.** Under §3.4, some categories are
+   almost always one urgency level (graffiti is mostly low; noise is never high). Urgency
+   accuracy is reported **next to a majority-urgency-per-category baseline** fitted on train.
+   A model gets no credit for urgency beyond what category alone predicts.
+2. **Per-urgency metrics report sample counts.** Eval has few `low` and `emergency` cases,
+   so every per-level number is shown as `correct / n`.
+3. **The no-address subset is deliberately enriched in eval** (40% of eval vs 10.6% of train)
+   to measure safety. Aggregate eval scores are not estimates of production accuracy.
+4. **The workload is short.** CivicDesk complaints are far below the 512-token ceiling (token
+   counts measured in Step 3). Any long-sequence memory run is labeled a **controlled stress
+   test**, not a representative workload.
+5. **Summary quality is not a primary quantitative metric** and will not be claimed as one.
+   Summaries are shown side by side for qualitative inspection only.
 
 ---
 

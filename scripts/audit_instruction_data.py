@@ -222,10 +222,20 @@ def main() -> int:
     # street_only is the one condition whose clarification rule depends on the issue
     # (point vs street-wide). If every record lands on one side, that rule is untaught.
     for split, recs in (("train", train), ("eval", evl)):
-        so = {r["needs_clarification"] for r in recs if r["location_type"] == "street_only"}
-        if len(so) == 1:
-            warnings.append(f"{split}: street_only clarification is constant ({so.pop()}); "
-                            "street-wide vs point-issue distinction is not represented")
+        so = Counter(r["needs_clarification"] for r in recs if r["location_type"] == "street_only")
+        print(f"  [{split}] street_only: actionable={so.get(False, 0)}  clarification={so.get(True, 0)}")
+        if not so.get(False) or not so.get(True):
+            msg = (f"{split}: street_only lacks an actionable or a clarification case "
+                   f"(actionable={so.get(False, 0)}, clarify={so.get(True, 0)})")
+            (failures if split == "eval" else warnings).append(msg)
+    # street-only actionable records must come from street-wide families, clarification from point families
+    for r in allr:
+        if r["location_type"] == "street_only":
+            fam_cat, fam_i = r["family_id"].split("/")
+            point = gen.SCENARIOS[fam_cat][int(fam_i)].point
+            if r["needs_clarification"] != point:
+                failures.append(f"{r['id']}: street_only clarification {r['needs_clarification']} "
+                                f"inconsistent with family point={point}")
 
     section("3c. URGENCY x CATEGORY (all records)")
     header = "  " + f"{'category':24s}" + "".join(f"{u:>10s}" for u in gen.URGENCY_LEVELS)

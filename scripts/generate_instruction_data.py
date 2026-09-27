@@ -567,9 +567,17 @@ def build_location(rng: random.Random, loc_type: str, scenario: Scenario) -> dic
 
     if loc_type == "street_only":
         r1, n1 = street_forms(rng, pick_street(rng), allow_bare=False)
-        # (with preposition, bare form for "Location: ..." frames)
-        locp, bare = rng.choice([("on {s}", "{s}"), ("somewhere on {s}", "somewhere on {s}"),
-                                 ("along {s}", "along {s}"), ("on {s}, not sure of the number", "{s}, not sure of the number")])
+        # (with preposition, bare form for "Location: ..." frames). Point issues get
+        # phrasings implying one unknown spot; street-wide issues get phrasings that
+        # describe the whole street ("somewhere on" would contradict "actionable").
+        if scenario.point:
+            # no "along {s}": it reads as distributed along the street, contradicting a point issue
+            options = [("on {s}", "{s}"), ("somewhere on {s}", "somewhere on {s}"),
+                       ("on {s}, not sure of the number", "{s}, not sure of the number")]
+        else:
+            options = [("on {s}", "{s}"), ("all along {s}", "all along {s}"),
+                       ("on {s}, the whole street", "{s}, the whole street"), ("up and down {s}", "up and down {s}")]
+        locp, bare = rng.choice(options)
         text = case_variant(rng, r1)
         return {"locp": locp.replace("{s}", LOC_TOKEN), "bare": bare.replace("{s}", LOC_TOKEN),
                 "text": text, "location": f"{n1} (no house number given)", "address": None}
@@ -821,11 +829,31 @@ def build_dataset(seed: int, data_cfg: dict) -> tuple[list[dict], list[dict], di
 
     # 1. Family-level split, stratified by category.
     split_fams: dict[str, dict[str, list[int]]] = {"train": {}, "eval": {}}
+    shuffled: dict[str, list[int]] = {}
     for cat in CATEGORIES:
         idx = list(range(len(SCENARIOS[cat])))
         rng.shuffle(idx)
+        shuffled[cat] = idx
         split_fams["eval"][cat] = sorted(idx[:fams_per_cat])
         split_fams["train"][cat] = sorted(idx[fams_per_cat:])
+
+    # 1b. Street-wide constraint (no RNG use): eval must hold at least N street-wide
+    # families so "street name only -> actionable" is testable. If the shuffle left
+    # too few, the first category (CATEGORIES order) with a street-wide train family
+    # swaps it for its last-drawn eval family.
+    def n_wide_eval() -> int:
+        return sum(not SCENARIOS[c][i].point for c in CATEGORIES for i in split_fams["eval"][c])
+
+    for cat in CATEGORIES:
+        if n_wide_eval() >= data_cfg["eval_street_wide_families_min"]:
+            break
+        wide_train = [i for i in split_fams["train"][cat] if not SCENARIOS[cat][i].point]
+        wide_eval = [i for i in split_fams["eval"][cat] if not SCENARIOS[cat][i].point]
+        if not wide_train or wide_eval:
+            continue
+        displaced = shuffled[cat][fams_per_cat - 1]  # last-drawn eval family
+        split_fams["eval"][cat] = sorted([i for i in split_fams["eval"][cat] if i != displaced] + [wide_train[0]])
+        split_fams["train"][cat] = sorted([i for i in split_fams["train"][cat] if i != wide_train[0]] + [displaced])
 
     records: dict[str, list[dict]] = {}
     for split, n in (("eval", n_eval), ("train", n_total - n_eval)):
@@ -849,6 +877,23 @@ def build_dataset(seed: int, data_cfg: dict) -> tuple[list[dict], list[dict], di
             slots[i]["location_type"] = "exact_address"
         for i, cond in zip(chosen, conds):
             slots[i]["location_type"] = cond
+
+        # 3b. Street-only quota (no RNG use): at least k street_only slots must sit on
+        # street-wide families (actionable), while the rest stay on point families
+        # (clarification required). Fix-up swaps location types between a point-family
+        # street_only slot and a street-wide-family slot, in slot order, so per-condition
+        # counts are unchanged.
+        def is_wide(s: dict) -> bool:
+            return not SCENARIOS[s["category"]][s["scenario_index"]].point
+
+        need = data_cfg["street_only_actionable_min"][split]
+        wide_slots = [i for i, s in enumerate(slots) if is_wide(s) and s["location_type"] != "street_only"]
+        point_so = [i for i, s in enumerate(slots) if not is_wide(s) and s["location_type"] == "street_only"]
+        have = sum(1 for s in slots if is_wide(s) and s["location_type"] == "street_only")
+        while have < need and wide_slots and len(point_so) > 1:  # keep >= 1 clarification case
+            w, p = wide_slots.pop(0), point_so.pop()
+            slots[w]["location_type"], slots[p]["location_type"] = "street_only", slots[w]["location_type"]
+            have += 1
 
         # 4. Style + optional secondary issue (same split, different category).
         styles, weights = zip(*STYLES)
