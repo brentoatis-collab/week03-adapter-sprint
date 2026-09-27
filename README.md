@@ -467,6 +467,19 @@ python3.11 -m venv .venv          # 3.12 preferred (it matches Colab); 3.11 was 
 .venv/bin/python training/validate_local.py           # CPU checks, no training
 ```
 
+**Colab smoke test (Step 3B).** [notebooks/week03_smoke_test.ipynb](notebooks/week03_smoke_test.ipynb)
+runs a real 5-optimizer-step QLoRA check on a T4 before the full experiment. It runs
+`training/preflight.py --require-cuda`, the data audit and the masking checks, then:
+
+```bash
+python training/train_qlora.py --run-label smoke --max-steps 5 --logging-steps 1 --eval-steps 5
+```
+
+Smoke runs are logged with `method=qlora_sft_smoke` and `run_label=smoke`, and they save to
+`outputs/smoke_adapter/`. That is separate from the production SFT output, so a smoke
+adapter can never be mistaken for the trained model. `--max-steps` requires a non-baseline
+label, and `smoke` requires `--max-steps`.
+
 *Full Colab instructions arrive with the notebook (Step 7).* In outline:
 
 1. Colab → Runtime → Change runtime type → **T4 GPU**.

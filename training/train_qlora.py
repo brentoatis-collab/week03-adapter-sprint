@@ -27,6 +27,7 @@ reading the installed source:
 Usage (Colab):
     python training/train_qlora.py --run-label baseline
     python training/train_qlora.py --run-label stress-mb16 --micro-batch-size 16 --grad-accum 1
+    python training/train_qlora.py --run-label smoke --max-steps 5 --logging-steps 1 --eval-steps 5
 """
 from __future__ import annotations
 
@@ -56,15 +57,26 @@ def parse_args(cfg: dict) -> argparse.Namespace:
     ap.add_argument("--epochs", type=float, default=s["num_train_epochs"])
     ap.add_argument("--warmup-ratio", type=float, default=s["warmup_ratio"])
     ap.add_argument("--eval-steps", type=int, default=s["eval_steps"])
+    ap.add_argument("--logging-steps", type=int, default=s["logging_steps"],
+                    help="logging cadence only (does not change optimization); smoke uses 1")
     ap.add_argument("--lora-r", type=int, default=l["r"])
     ap.add_argument("--lora-alpha", type=int, default=l["lora_alpha"])
     ap.add_argument("--lora-dropout", type=float, default=l["lora_dropout"])
-    ap.add_argument("--output-dir", default=s["output_dir"])
+    ap.add_argument("--output-dir", default=None,
+                    help="default: sft.output_dir, or sft.smoke_output_dir for --run-label smoke")
     ap.add_argument("--max-steps", type=int, default=-1,
                     help="optional cap (e.g. a stress probe); -1 = full epochs. Logged in the run row.")
     ap.add_argument("--corrective-action", default="", help="what changed vs the failed run this one corrects")
     ap.add_argument("--notes", default="")
-    return ap.parse_args()
+    args = ap.parse_args()
+    # A step-capped run must never be mistaken for (or saved as) the production SFT adapter.
+    if args.run_label == "smoke" and args.max_steps <= 0:
+        ap.error("--run-label smoke requires --max-steps > 0")
+    if args.max_steps > 0 and args.run_label == "baseline":
+        ap.error("--max-steps truncates training; use a non-baseline --run-label (e.g. smoke)")
+    if args.output_dir is None:
+        args.output_dir = s["smoke_output_dir"] if args.run_label == "smoke" else s["output_dir"]
+    return args
 
 
 def print_run_config(cfg: dict, a: argparse.Namespace, targets: list[str] | None) -> None:
@@ -110,9 +122,35 @@ def load_quantized_model(cfg: dict):
         bnb_4bit_compute_dtype=getattr(torch, q["bnb_4bit_compute_dtype"]),
     )
     print(f"\nquantization config: {bnb.to_dict()}")
-    return AutoModelForCausalLM.from_pretrained(
+    model = AutoModelForCausalLM.from_pretrained(
         cfg["model"]["model_id"], quantization_config=bnb, dtype=torch.float16,
         device_map={"": 0}, attn_implementation=cfg["model"]["attn_implementation"])
+    print_quantization_evidence(model, q)
+    return model
+
+
+def print_quantization_evidence(model, q: dict) -> None:
+    """Show that projections really are bitsandbytes 4-bit NF4 (+ double quant); fail if not."""
+    from collections import Counter
+
+    classes = Counter(type(m).__name__ for n, m in model.named_modules() if n.endswith("_proj"))
+    first = next(m for n, m in model.named_modules() if n.endswith("self_attn.q_proj"))
+    qs = getattr(first.weight, "quant_state", None)
+    print("\nQUANTIZATION EVIDENCE")
+    print(f"  projection module classes      {dict(classes)}")
+    print(f"  q_proj weight class / dtype    {type(first.weight).__name__} / {first.weight.dtype}")
+    print(f"  quant_state.quant_type         {getattr(qs, 'quant_type', None)}")
+    print(f"  quant_state.nested (double q)  {getattr(qs, 'nested', None)}")
+    print(f"  model.is_loaded_in_4bit        {getattr(model, 'is_loaded_in_4bit', None)}")
+    print(f"  embed / lm_head dtype          {model.get_input_embeddings().weight.dtype} / "
+          f"{model.get_output_embeddings().weight.dtype}")
+    print(f"  memory footprint (HF)          {model.get_memory_footprint() / 2**30:.3f} GiB")
+    if set(classes) != {"Linear4bit"}:
+        raise RuntimeError(f"expected every *_proj to be Linear4bit, found {dict(classes)}")
+    if getattr(qs, "quant_type", None) != q["bnb_4bit_quant_type"]:
+        raise RuntimeError(f"quant_type {getattr(qs, 'quant_type', None)} != {q['bnb_4bit_quant_type']}")
+    if q["bnb_4bit_use_double_quant"] and not getattr(qs, "nested", False):
+        raise RuntimeError("double quantization requested but quant_state is not nested")
 
 
 def attach_lora(model, cfg: dict, a: argparse.Namespace, quantized: bool):
@@ -175,7 +213,7 @@ def build_training_args(cfg: dict, a: argparse.Namespace, out_dir, cpu_check: bo
         gradient_checkpointing_kwargs={"use_reentrant": False} if a.gradient_checkpointing else None,
         eval_strategy="steps",
         eval_steps=a.eval_steps,
-        logging_steps=s["logging_steps"],
+        logging_steps=a.logging_steps,
         logging_first_step=True,
         logging_nan_inf_filter=False,     # never hide NaN/inf in logs
         save_strategy="no",               # adapter saved explicitly at the end
@@ -229,14 +267,15 @@ def main() -> int:
     import torch
     from transformers import Trainer
 
-    run_id = C.make_run_id("qlora_sft", a.run_label)
+    method = "qlora_sft_smoke" if a.run_label == "smoke" else "qlora_sft"
+    run_id = C.make_run_id(method, a.run_label)
     out_dir = C.repo_path(a.output_dir) / run_id
     versions = C.package_versions()
     row = {
         "run_id": run_id, "timestamp_utc": C.utc_now(), "git_commit": C.git_commit(), "gpu_name": C.gpu_name(),
         "torch_version": versions["torch"], "transformers_version": versions["transformers"],
         "peft_version": versions["peft"], "trl_version": versions["trl"], "bitsandbytes_version": versions["bitsandbytes"],
-        "model_id": cfg["model"]["model_id"], "method": "qlora_sft", "run_label": a.run_label,
+        "model_id": cfg["model"]["model_id"], "method": method, "run_label": a.run_label,
         "quantization": f"4bit-{cfg['quantization']['bnb_4bit_quant_type']}-dq{int(cfg['quantization']['bnb_4bit_use_double_quant'])}"
                         f"-{cfg['quantization']['bnb_4bit_compute_dtype']}",
         "lora_rank": a.lora_r, "lora_alpha": a.lora_alpha,
@@ -250,6 +289,7 @@ def main() -> int:
     }
 
     step_timer = C.make_step_timer_callback()
+    grad_check = C.make_lora_grad_check_callback()
     wall = C.WallClock()
     status, failure = "started", ""
     C.reset_peak_memory()  # peak covers model load + training
@@ -272,7 +312,7 @@ def main() -> int:
 
         trainer = CheckedTrainer(model=model, args=targs, train_dataset=train_ds, eval_dataset=eval_ds,
                                  data_collator=C.PadCollator(tok.pad_token_id), processing_class=tok,
-                                 callbacks=[step_timer])
+                                 callbacks=[step_timer, grad_check])
         with wall:
             result = trainer.train()
         status = "completed"
@@ -299,6 +339,9 @@ def main() -> int:
     except C.NonFiniteLossError as e:
         status, failure = "non_finite_loss", str(e)
         raise
+    except C.GradientFlowError as e:
+        status, failure = "gradient_flow_error", str(e)[:400]
+        raise
     except Exception as e:
         status, failure = "error", f"{type(e).__name__}: {str(e).splitlines()[0][:400] if str(e) else ''}"
         raise
@@ -314,6 +357,10 @@ def main() -> int:
                     "avg_step_time_s": st["avg_step_time_s"]})
         row.setdefault("total_steps", len(step_timer.durations))
         row["notes"] += f"; steps_timed={st['steps_timed']}; first_step_s={st['first_step_time_s']}; avg excludes first step"
+        gc = grad_check.result
+        row["notes"] += (f"; grad_check=passed@step{gc['step']} lora_nonzero={gc['lora_nonzero_grad']}/{gc['lora_tensors']}"
+                         f" amp_overflow_steps={gc['amp_overflow_steps_before']}" if gc else
+                         f"; grad_check=not_passed amp_overflow_steps={grad_check.overflow_steps}")
         path = C.append_experiment_log(row)
         print("\n" + "=" * 78 + f"\nRUN RESULT ({status}) appended to {path}")
         for k in ("peak_allocated_gb", "peak_reserved_gb", "wall_clock_s", "avg_step_time_s", "total_steps",

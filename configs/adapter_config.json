@@ -45,6 +45,7 @@
     "eval_steps": 10,
     "seed": 42,
     "output_dir": "outputs/qlora_sft",
+    "smoke_output_dir": "outputs/smoke_adapter",
     "_comment": "Effective batch = micro_batch_size x gradient_accumulation_steps = 16. lr 2e-4 and max_grad_norm 0.3 follow common QLoRA practice. optim adamw_torch: optimizer state for ~2M adapter params is only a few MB, so paged 8-bit optimizers are not needed at baseline."
   },
 

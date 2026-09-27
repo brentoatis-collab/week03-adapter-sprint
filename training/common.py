@@ -402,6 +402,65 @@ def make_step_timer_callback():
     return StepTimer()
 
 
+class GradientFlowError(RuntimeError):
+    pass
+
+
+def make_lora_grad_check_callback():
+    """Inspect real gradients once, at the first optimizer step (after clipping/unscaling,
+    before optimizer.step()). Raises if no LoRA tensor received a finite nonzero gradient or
+    if any frozen base parameter has a gradient."""
+    import torch
+    from transformers import TrainerCallback
+
+    class LoraGradCheck(TrainerCallback):
+        """fp16 AMP may produce inf grads on early steps (GradScaler then skips the step and
+        lowers its scale). Such steps are recorded, not treated as failures; the check passes
+        at the first step with finite LoRA grads and fails if training ends without one."""
+
+        def __init__(self):
+            self.result: dict | None = None
+            self.overflow_steps: list[int] = []
+
+        def on_train_end(self, args, state, control, **kw):
+            if self.result is None:
+                raise GradientFlowError(f"no optimizer step had finite LoRA gradients "
+                                        f"(AMP overflow steps: {self.overflow_steps})")
+
+        def on_pre_optimizer_step(self, args, state, control, model=None, **kw):
+            if self.result is not None or model is None:
+                return
+            lora_total = lora_nonzero = lora_nonfinite = 0
+            base_with_grad = []
+            for n, p in model.named_parameters():
+                if "lora_" in n and p.requires_grad:
+                    lora_total += 1
+                    if p.grad is not None:
+                        g = p.grad.detach()
+                        if not torch.isfinite(g).all():
+                            lora_nonfinite += 1
+                        elif g.abs().sum() > 0:
+                            lora_nonzero += 1
+                elif p.grad is not None:
+                    base_with_grad.append(n)
+            if base_with_grad:
+                raise GradientFlowError(f"frozen base parameters received gradients: {base_with_grad[:5]}")
+            step = state.global_step + 1
+            if lora_nonfinite:
+                self.overflow_steps.append(step)
+                print(f"\nGRADIENT CHECK step {step}: {lora_nonfinite} LoRA tensors non-finite "
+                      "(fp16 overflow; GradScaler skips this step) - rechecking next step")
+                return
+            if lora_nonzero == 0:
+                raise GradientFlowError(f"step {step}: no LoRA tensor received a nonzero gradient "
+                                        f"({lora_total} LoRA tensors)")
+            self.result = {"step": step, "lora_tensors": lora_total, "lora_nonzero_grad": lora_nonzero,
+                           "base_params_with_grad": 0, "amp_overflow_steps_before": list(self.overflow_steps)}
+            print(f"\nGRADIENT CHECK passed: {self.result}")
+
+    return LoraGradCheck()
+
+
 class NonFiniteLossError(RuntimeError):
     pass
 

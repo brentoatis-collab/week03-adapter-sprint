@@ -138,6 +138,29 @@ def main() -> int:
     base_grads = [n for n, p in model.named_parameters() if p.grad is not None and "lora_" not in n]
     check("gradients reach LoRA B matrices", len(lora_grads) == 96, f"{len(lora_grads)} lora_B tensors with nonzero grad")
     check("no gradients on frozen base parameters", not base_grads, f"{len(base_grads)} base tensors with grad")
+
+    # 5b. LoRA gradient-check callback logic on these real CPU gradients
+    from types import SimpleNamespace
+    st = SimpleNamespace(global_step=0)
+    cb = C.make_lora_grad_check_callback()
+    cb.on_pre_optimizer_step(None, st, None, model=model)
+    check("grad-check callback passes on real LoRA gradients",
+          cb.result is not None and cb.result["lora_nonzero_grad"] == 96, str(cb.result))
+    lora_p = next(p for n, p in model.named_parameters() if "lora_B" in n)
+    saved = lora_p.grad.clone()
+    lora_p.grad[0, 0] = float("inf")                       # simulate an fp16 overflow step
+    cb2 = C.make_lora_grad_check_callback()
+    cb2.on_pre_optimizer_step(None, st, None, model=model)
+    check("grad-check treats AMP overflow step as skip, not failure",
+          cb2.result is None and cb2.overflow_steps == [1], f"overflow_steps={cb2.overflow_steps}")
+    expect_raises("grad-check fails if training ends with no finite step", C.GradientFlowError,
+                  lambda: cb2.on_train_end(None, st, None))
+    lora_p.grad = saved
+    base_p = next(p for n, p in model.named_parameters() if "lora_" not in n)
+    base_p.grad = torch.zeros_like(base_p)
+    expect_raises("grad-check fails if a frozen base parameter has a gradient", C.GradientFlowError,
+                  lambda: C.make_lora_grad_check_callback().on_pre_optimizer_step(None, st, None, model=model))
+    base_p.grad = None
     del model
 
     # 6
@@ -182,6 +205,26 @@ def main() -> int:
     check("warmup ratio 0.1 resolves to ~10% of steps",
           ta.get_warmup_steps(total) == math.ceil(0.1 * total),
           f"~{total} optimizer steps planned ({per_epoch}/epoch) -> {ta.get_warmup_steps(total)} warmup steps")
+
+    # 8c. smoke-run isolation guards
+    script = str(Path(__file__).parent / "train_qlora.py")
+    p1 = subprocess.run([sys.executable, script, "--run-label", "smoke", "--dry-run"], capture_output=True, text=True)
+    check("'smoke' without --max-steps is rejected", p1.returncode == 2 and "requires --max-steps" in p1.stderr)
+    p2 = subprocess.run([sys.executable, script, "--max-steps", "5", "--dry-run"], capture_output=True, text=True)
+    check("'baseline' with --max-steps is rejected", p2.returncode == 2 and "non-baseline" in p2.stderr)
+    argv, sys.argv = sys.argv, ["train_qlora.py", "--run-label", "smoke", "--max-steps", "5"]
+    try:
+        sa = train_qlora.parse_args(cfg)
+    finally:
+        sys.argv = argv
+    check("smoke output routed away from production SFT dir",
+          sa.output_dir == cfg["sft"]["smoke_output_dir"] != cfg["sft"]["output_dir"], sa.output_dir)
+    p3 = subprocess.run([sys.executable, script, "--run-label", "smoke", "--max-steps", "5", "--logging-steps", "1",
+                         "--eval-steps", "5", "--dry-run"], capture_output=True, text=True)
+    check("smoke dry-run (exact notebook flags) passes", p3.returncode == 0 and "DRY RUN complete" in p3.stdout)
+    p4 = subprocess.run([sys.executable, script, "--run-label", "smoke", "--max-steps", "5", "--logging-steps", "1",
+                         "--eval-steps", "5"], capture_output=True, text=True)
+    check("smoke CUDA path refuses without CUDA", p4.returncode != 0 and "CUDA is not available" in p4.stderr)
 
     # 8b
     proc = subprocess.run([sys.executable, str(Path(__file__).parent / "train_qlora.py"), "--run-label", "cpu-refusal-check"],
