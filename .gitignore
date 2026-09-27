@@ -1,0 +1,54 @@
+# ---------------------------------------------------------------------------
+# Week 03 Adapter Sprint — .gitignore
+# ---------------------------------------------------------------------------
+
+# --- Credentials: NEVER commit tokens or secrets ---------------------------
+.env
+.env.*
+*.env
+.huggingface/
+hf_token*
+*token*.txt
+secrets*.json
+kaggle.json
+
+# --- Model artifacts (large; reproduced by training) -----------------------
+outputs/
+checkpoints/
+adapters/
+runs/
+wandb/
+*.safetensors
+*.bin
+*.pt
+*.pth
+*.ckpt
+*.gguf
+
+# --- Hugging Face / cache directories --------------------------------------
+.cache/
+hf_cache/
+
+# --- Python ---------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# --- Jupyter ---------------------------------------------------------------
+.ipynb_checkpoints/
+
+# --- OS / editor -----------------------------------------------------------
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# NOTE: data/*.jsonl and logs/experiment_log.csv are intentionally TRACKED.
+# The synthetic datasets are deterministic and small, and the experiment log
+# is the auditable record of real runs.
