@@ -283,6 +283,10 @@ an estimate of production accuracy.
 
 **Audit.** Run `python scripts/audit_instruction_data.py` (exit code 1 on any hard failure).
 
+**Dataset status: FROZEN** (after the Step 2 data-quality corrections). The committed
+`data/instruction_*.jsonl` files are the instruction dataset for all experiments. They change
+only if a genuine defect is found, and any such change is committed separately with its reason.
+
 | Topic | Status |
 |---|---|
 | Instruction dataset design + audit | done (see 7.1) |
@@ -342,8 +346,10 @@ The same held-out complaints are scored for all three models with greedy decodin
    almost always one urgency level (graffiti is mostly low; noise is never high). Urgency
    accuracy is reported **next to a majority-urgency-per-category baseline** fitted on train.
    A model gets no credit for urgency beyond what category alone predicts.
-2. **Per-urgency metrics report sample counts.** Eval has few `low` and `emergency` cases,
-   so every per-level number is shown as `correct / n`.
+2. **Per-urgency metrics report sample counts.** Eval has few `low` (9) and **`emergency`
+   (3)** cases, so every per-level number is shown as `correct / n`. No emergency-specific
+   performance claim is made from n = 3. The eval set is deliberately **not** rebalanced to
+   raise this count.
 3. **The no-address subset is deliberately enriched in eval** (40% of eval vs 10.6% of train)
    to measure safety. Aggregate eval scores are not estimates of production accuracy.
 4. **The workload is short.** CivicDesk complaints are far below the 512-token ceiling (token

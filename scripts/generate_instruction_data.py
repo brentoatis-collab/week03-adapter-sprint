@@ -134,8 +134,10 @@ SCENARIOS: dict[str, list[Scenario]] = {
           ("dumped tires", "pile of tires"), "Tires illegally dumped", "QUALITY_OF_LIFE"),
         S(("contractors dumped drywall and debris", "there's a pile of construction debris dumped", "someone dumped busted drywall and lumber"),
           ("construction debris dumped", "drywall dumped"), "Construction debris illegally dumped", "QUALITY_OF_LIFE"),
-        S(("there's tons of litter everywhere", "wrappers and bottles are all over the place", "the litter is out of control"),
-          ("litter everywhere", "lots of litter"), "Excessive litter", "COSMETIC"),
+        # Localized: litter concentrated at one spot (street name alone cannot pinpoint it).
+        S(("there's a big pile of litter heaped up in one spot", "wrappers and bottles are piled up in one corner by the curb",
+           "a heap of trash and litter has built up next to one of the utility poles"),
+          ("pile of litter in one spot", "litter heaped by curb"), "Excessive litter", "COSMETIC"),
     ],
     "graffiti": [
         S(("someone tagged the wall", "there's graffiti all over the wall", "somebody spray painted the side of the building"),
