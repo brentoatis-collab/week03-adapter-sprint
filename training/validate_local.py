@@ -185,6 +185,28 @@ def main() -> int:
               f"{n_before} -> {len(lines)} lines in temp log")
         expect_raises("logger rejects unknown columns", KeyError,
                       lambda: C.append_experiment_log({"run_id": "x", "fake_metric": 1}, tmp))
+        # Step 5A fields: a row built from the new helpers must be accepted by the migrated header
+        ph = C.MemoryPhases()
+        ph.mark("load", next_phase="train")
+        ph.mark("train")
+        full_row = {"run_id": "LOGGER-SELFTEST-5A", "status": "logger_selftest", **C.environment_provenance(),
+                    **ph.row_fields(), **C.allocator_stats(), "adapter_path": "x", "adapter_sha256": "y"}
+        C.append_experiment_log(full_row, tmp)
+        check("Step 5A provenance/phase/allocator fields fit the log header", True, f"{len(full_row)} keys")
+        check("phase/allocator helpers report NA (not numbers) without CUDA",
+              full_row["peak_allocated_train_gb"] == C.NA_NO_CUDA and full_row["alloc_retries"] == C.NA_NO_CUDA
+              and full_row["gpu_capability"] == C.NA_NO_CUDA and full_row["python_version"].count(".") == 2,
+              f"python={full_row['python_version']} torch_cuda_build={full_row['torch_cuda_build']}")
+
+    # 7b. log schema migration preserved every committed row byte-for-byte
+    head_log = subprocess.run(["git", "show", "HEAD:logs/experiment_log.csv"], cwd=C.REPO_ROOT,
+                              capture_output=True, text=True, check=True).stdout.splitlines()
+    cur_log = log_path.read_text().splitlines()
+    check("log header only extended (old columns are an exact prefix)",
+          cur_log[0].startswith(head_log[0] + ",") or cur_log[0] == head_log[0],
+          f"{len(head_log[0].split(','))} -> {len(cur_log[0].split(','))} columns")
+    check("all committed log rows unchanged", cur_log[1:len(head_log)] == head_log[1:],
+          f"{len(head_log) - 1} committed row(s) compared")
 
     # 8a. TrainingArguments built by the real code path (fp16 disabled only because it is GPU-only)
     import train_qlora

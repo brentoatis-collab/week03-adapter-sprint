@@ -205,11 +205,25 @@ sequence are about 0.3 GB. Section 8 interprets the results with that in mind.
 - The HF stack is **pinned exactly** in [requirements.txt](requirements.txt):
   transformers 5.17.0, peft 0.21.0, trl 1.14.0, bitsandbytes 0.50.2, accelerate 1.15.0,
   datasets 5.0.1. Their declared dependency constraints were checked, and pip's resolver
-  confirmed the set is conflict-free on Linux x86_64 / Python 3.12 (the Colab platform)
-  on 2026-09-27. Training code is written against **these** APIs.
+  confirmed the set is conflict-free on Linux x86_64 / Python 3.12 on 2026-09-27. 3.12 was
+  the *assumed* Colab Python at that time. Training code is written against **these** APIs.
 - **torch is not pinned exactly.** Colab's preinstalled CUDA build is used, subject to
   `torch>=2.4,<3` (the bitsandbytes requirement). The notebook prints the torch and CUDA
   versions and the GPU's compute capability, and each log row records the package versions.
+- **Measured environments. Keep these distinct:**
+
+  | Environment | Python | torch | GPU | Used for |
+  |---|---|---|---|---|
+  | Colab (measured, T4 smoke run) | **3.13.15** | **2.11.0+cu128** | Tesla T4, compute 7.5, 15360 MiB | all GPU runs |
+  | Local development (macOS, CPU) | 3.11.15 | 2.14.0 (no CUDA) | none | CPU validation only |
+  | Resolver pre-check | 3.12 (assumed) | n/a | n/a | install-compatibility check |
+
+  From Step 5A, every experiment-log row also records `python_version`, `torch_cuda_build`,
+  `cudnn_version`, `gpu_capability`, `gpu_total_memory_gb` and `cuda_alloc_conf`. The
+  earlier smoke row was not rewritten, so those fields are empty for it. Its Python and CUDA
+  values above come from the run's notebook output.
+- On Colab, `pip check` reports that `ipython 7.34.0 requires jedi`. That comes from Colab's
+  own IPython, and `jedi` is not in this project's dependency tree. It needs no action.
 - The resolver only proves the packages can be *installed* together. Runtime compatibility
   (the 4-bit T4 kernels and TRL's DPO adapter-reference path) is checked in the notebook
   before any training.
@@ -369,10 +383,24 @@ built, and a missing target is a hard error with no substitution.
 | `prepare_model_for_kbit_training` only freezes | it also upcasts **all** non-4-bit fp16/bf16 params (embeddings, norms, tied lm_head) to fp32, and enables checkpointing | expected, and counted in the memory interpretation |
 
 **Instrumentation.**
-- Peak allocated and reserved memory are measured with `torch.cuda.max_memory_*` after
-  `reset_peak_memory_stats()` is called **just before model load**, so the peak covers loading
-  plus training.
-- Wall-clock time covers `trainer.train()`.
+- Peak allocated and reserved memory are measured with `torch.cuda.max_memory_*`, starting
+  **just before model load**. `peak_allocated_gb` and `peak_reserved_gb` are the maxima over
+  the whole run, covering loading, training and evaluation.
+- **Per-phase peaks** (from Step 5A) split this into `load`, `train` and `eval`. The peak
+  counters are reset at each phase boundary; nothing changes how memory is allocated.
+- **Allocator counters** (from Step 5A):
+  - `alloc_retries`: how many times a `cudaMalloc` failed and the caching allocator released
+    cached blocks and retried. This means the cache reached the device limit; it is not an OOM.
+  - `cuda_ooms`
+  - `peak_inactive_split_gb`: cached but unused space inside split blocks.
+  - `peak_segments`
+- **Allocated vs reserved.** *Allocated* is live tensor memory, the model's actual demand.
+  *Reserved* is what PyTorch's caching allocator holds from the device, which includes freed
+  blocks it keeps for reuse. Reserved is therefore a cache high-water mark, not demand.
+  Neither includes the CUDA context (roughly 0.3–0.5 GB), which `nvidia-smi` does show.
+- Wall-clock time covers `trainer.train()`, including the periodic evaluations. After
+  training, one more evaluation scores the final weights; its duration is recorded separately
+  (`final_eval_s` in `notes`).
 - Average step time is the mean optimizer-step duration, CUDA-synchronized, excluding the first
   step and excluding evaluation.
 - Every CUDA run, successful or failed, appends one row to `logs/experiment_log.csv`.
@@ -497,9 +525,35 @@ behavioral evaluation on the frozen eval set (§9).
 
 ### 8.1 Run summary (from `logs/experiment_log.csv`)
 
-| Run ID | Method | Seq len | Micro-batch | Grad accum | Peak alloc (GB) | Peak reserved (GB) | Wall clock | Avg step (s) | Status |
+| Run ID | Method | Seq len | Micro-batch | Grad accum | Peak alloc (GiB) | Peak reserved (GiB) | Wall clock (s) | Avg step (s) | Status |
 |---|---|---|---|---|---|---|---|---|---|
-| *pending* | | | | | | | | | |
+| qlora_sft_smoke-smoke-20260927T220352Z | qlora_sft_smoke (5 steps) | 512 | 4 | 4 | 4.122 | 13.221 | 14.75 | 2.1643 | completed |
+| *full SFT: pending* | | | | | | | | | |
+
+The smoke row is a 5-step execution check, **not** an SFT result. Its losses (train 0.6475,
+eval 0.9421) describe 5 steps only.
+
+**Smoke-run allocated/reserved gap (4.122 vs 13.221 GiB): diagnosis, not yet confirmed.**
+- **Allocated (4.1 GiB) is mostly transient vocabulary logits.** With 151,936 vocabulary
+  entries, one micro-batch of 4 × ~430–457 tokens produces fp16 logits of about 0.5 GiB. The
+  loss upcasts them to fp32 (`logits.float()`, about 1.1 GiB), cross-entropy's log-softmax
+  adds about 1.1 GiB, and the backward pass adds gradients of similar size. On top of that sit
+  the resident model: roughly 0.2 GiB of 4-bit weights plus 0.54 GiB of fp32 embedding/lm_head
+  after `prepare_model_for_kbit_training`. This estimate lands close to 4.1 GiB.
+- **Reserved (13.2 GiB) most likely reflects caching-allocator retention.** Each micro-batch
+  is padded to its own maximum length, so the ~0.5–1.1 GiB logits tensors have a different
+  size almost every forward pass across 20 training micro-batches and 15 evaluation batches.
+  Freed blocks stay cached, and a larger request can't reuse a smaller cached block. The cache
+  can therefore grow toward the device limit, where the allocator frees cached blocks and
+  retries.
+- **This is not an OOM.** The run completed. There is also no evidence of a leak, but none
+  against one either: the smoke run did not measure allocated memory at the end of the run.
+- **The smoke row cannot confirm this.** It has no per-phase peaks or allocator counters. The
+  Step 5A instrumentation (`peak_*_{load,train,eval}_gb`, `alloc_retries`,
+  `peak_inactive_split_gb`) is designed to confirm or refute it in the full run.
+- **Implication for the 15 GB ceiling claim.** Allocated (demand) and reserved (cache) are
+  reported separately. A reserved value near the device limit together with `alloc_retries > 0`
+  indicates cache pressure, not demand exceeding 15 GB.
 
 ### 8.2 Controlled stress test and failure diagnosis
 
@@ -563,7 +617,7 @@ The same held-out complaints are scored for all three models with greedy decodin
 **Local CPU validation** (no GPU; does not train or quantize):
 
 ```bash
-python3.11 -m venv .venv          # 3.12 preferred (it matches Colab); 3.11 was used locally
+python3.11 -m venv .venv          # local CPU validation used 3.11; the measured Colab runtime is 3.13
 .venv/bin/pip install "torch>=2.4,<3" transformers==5.17.0 peft==0.21.0 accelerate==1.15.0
 .venv/bin/python training/check_masking.py            # masking diagnostic on real records
 .venv/bin/python training/train_qlora.py --dry-run    # config + data + masking, no model

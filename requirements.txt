@@ -4,8 +4,11 @@
 # --------
 # * The Hugging Face training stack is pinned EXACTLY. Training code is written
 #   against these versions' APIs; do not upgrade one package in isolation.
-#   The set below was checked with pip's resolver for Linux x86_64 / Python 3.12
-#   (the Colab platform) on 2026-09-27 and resolves without conflicts.
+#   Before any Colab run, the set was checked with pip's resolver for
+#   Linux x86_64 / Python 3.12 on 2026-09-27 (assumed Colab platform) and resolved
+#   without conflicts. The MEASURED Colab runtime (T4 smoke test) was Python 3.13.15
+#   with torch 2.11.0+cu128, where this set also installed. Local CPU validation used
+#   Python 3.11. Each experiment-log row records the actual Python/torch/CUDA build.
 # * torch is deliberately NOT pinned exactly. Colab ships a CUDA build of torch
 #   matched to its driver; reinstalling torch there is slow and can break CUDA.
 #   The range below is the constraint required by bitsandbytes. The notebook

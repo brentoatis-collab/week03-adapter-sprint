@@ -360,6 +360,81 @@ def peak_memory_gb() -> dict[str, Any]:
             "peak_reserved_gb": round(torch.cuda.max_memory_reserved() / 2**30, 3)}
 
 
+class MemoryPhases:
+    """Per-phase CUDA peaks (load / train / eval) without changing allocator behavior.
+
+    mark(phase) folds the peak since the previous mark into `phase`, then resets the peak
+    counters. The global peak is the max over phases, i.e. the same quantity as a single
+    reset before model load. Cumulative allocator counters (e.g. num_alloc_retries) are
+    never reset, so they cover the whole process.
+    """
+
+    def __init__(self):
+        self.peaks: dict[str, dict[str, float]] = {}
+        self.active = "load"
+        reset_peak_memory()
+
+    def mark(self, phase: str, next_phase: str | None = None) -> None:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+            a, r = torch.cuda.max_memory_allocated() / 2**30, torch.cuda.max_memory_reserved() / 2**30
+            p = self.peaks.setdefault(phase, {"allocated": 0.0, "reserved": 0.0})
+            p["allocated"], p["reserved"] = max(p["allocated"], a), max(p["reserved"], r)
+            torch.cuda.reset_peak_memory_stats()
+        self.active = next_phase or phase
+
+    def row_fields(self) -> dict[str, Any]:
+        import torch
+        if not torch.cuda.is_available():
+            out = {"peak_allocated_gb": NA_NO_CUDA, "peak_reserved_gb": NA_NO_CUDA}
+            for ph in ("load", "train", "eval"):
+                out[f"peak_allocated_{ph}_gb"] = out[f"peak_reserved_{ph}_gb"] = NA_NO_CUDA
+            return out
+        out = {"peak_allocated_gb": round(max((p["allocated"] for p in self.peaks.values()), default=0.0), 3),
+               "peak_reserved_gb": round(max((p["reserved"] for p in self.peaks.values()), default=0.0), 3)}
+        for ph in ("load", "train", "eval"):
+            p = self.peaks.get(ph)
+            out[f"peak_allocated_{ph}_gb"] = round(p["allocated"], 3) if p else "NA_phase_not_reached"
+            out[f"peak_reserved_{ph}_gb"] = round(p["reserved"], 3) if p else "NA_phase_not_reached"
+        return out
+
+
+def allocator_stats() -> dict[str, Any]:
+    """Caching-allocator counters that separate tensor demand from cache retention.
+
+    alloc_retries > 0 means a cudaMalloc failed and the allocator freed cached blocks and
+    retried, i.e. the cache had grown to the device limit (not an OOM by itself).
+    peak_inactive_split_gb = cached-but-unused space inside split blocks (fragmentation).
+    Values are cumulative/peak since process start or the last peak reset.
+    """
+    import torch
+    if not torch.cuda.is_available():
+        return {"alloc_retries": NA_NO_CUDA, "cuda_ooms": NA_NO_CUDA, "peak_inactive_split_gb": NA_NO_CUDA,
+                "peak_segments": NA_NO_CUDA}
+    s = torch.cuda.memory_stats()
+    miss = "NA_key_missing"
+    gb = lambda k: round(s[k] / 2**30, 3) if k in s else miss  # noqa: E731
+    return {"alloc_retries": s.get("num_alloc_retries", miss), "cuda_ooms": s.get("num_ooms", miss),
+            "peak_inactive_split_gb": gb("inactive_split_bytes.all.peak"), "peak_segments": s.get("segment.all.peak", miss)}
+
+
+def environment_provenance() -> dict[str, Any]:
+    import platform
+    import torch
+    out = {"python_version": platform.python_version(),
+           "torch_cuda_build": torch.version.cuda or "none",
+           "cudnn_version": torch.backends.cudnn.version() if torch.backends.cudnn.is_available() else "none",
+           "cuda_alloc_conf": os.environ.get("PYTORCH_CUDA_ALLOC_CONF", "unset")}
+    if torch.cuda.is_available():
+        cap = torch.cuda.get_device_capability(0)
+        out["gpu_capability"] = f"{cap[0]}.{cap[1]}"
+        out["gpu_total_memory_gb"] = round(torch.cuda.get_device_properties(0).total_memory / 2**30, 3)
+    else:
+        out["gpu_capability"] = out["gpu_total_memory_gb"] = NA_NO_CUDA
+    return out
+
+
 class WallClock:
     def __enter__(self):
         self.start = time.perf_counter()

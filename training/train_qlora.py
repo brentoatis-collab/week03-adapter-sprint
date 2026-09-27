@@ -285,14 +285,15 @@ def main() -> int:
         "learning_rate": a.learning_rate, "num_epochs": a.epochs, "dpo_beta": "",
         "corrective_action": a.corrective_action,
         "notes": "; ".join(x for x in [a.notes, f"max_steps={a.max_steps}" if a.max_steps > 0 else "",
-                                       "peak memory measured from start of model load"] if x),
+                                       "peak_*_gb = max over load/train/eval phases since model load"] if x),
     }
+    row.update(C.environment_provenance())
 
     step_timer = C.make_step_timer_callback()
     grad_check = C.make_lora_grad_check_callback()
     wall = C.WallClock()
     status, failure = "started", ""
-    C.reset_peak_memory()  # peak covers model load + training
+    phases = C.MemoryPhases()  # resets peaks: global peak covers model load + training + evaluation
     try:
         model = load_quantized_model(cfg)
         model, targets, rep, _ = attach_lora(model, cfg, a, quantized=True)
@@ -301,6 +302,7 @@ def main() -> int:
         if a.gradient_checkpointing:
             model.config.use_cache = False
         print_run_config(cfg, a, targets)
+        phases.mark("load", next_phase="train")
 
         targs = build_training_args(cfg, a, out_dir)
 
@@ -310,26 +312,59 @@ def main() -> int:
                 C.check_finite_loss(float(loss), self.state.global_step)
                 return loss
 
+            def evaluate(self, *args, **kwargs):
+                # attribute evaluation-time CUDA peaks to the "eval" phase (measurement only)
+                prev = phases.active
+                phases.mark(prev, next_phase="eval")
+                try:
+                    return super().evaluate(*args, **kwargs)
+                finally:
+                    phases.mark("eval", next_phase=prev)
+
         trainer = CheckedTrainer(model=model, args=targs, train_dataset=train_ds, eval_dataset=eval_ds,
                                  data_collator=C.PadCollator(tok.pad_token_id), processing_class=tok,
                                  callbacks=[step_timer, grad_check])
         with wall:
             result = trainer.train()
+        phases.mark("train")
+
+        # Final evaluation of the final weights (periodic evals may not land on the last step).
+        # Monitoring only: the adapter is always the last step; no checkpoint is selected on
+        # eval loss, because the eval set is also the held-out behavioral test set.
+        final_eval_wall = C.WallClock()
+        with final_eval_wall:
+            final_metrics = trainer.evaluate()
+        C.check_finite_loss(float(final_metrics["eval_loss"]), trainer.state.global_step)
         status = "completed"
 
         hist = trainer.state.log_history
         train_losses = [h["loss"] for h in hist if "loss" in h]
-        eval_losses = [h["eval_loss"] for h in hist if "eval_loss" in h]
         row.update({"total_steps": trainer.state.global_step,
                     "final_train_loss": round(train_losses[-1], 4) if train_losses else "NA",
-                    "final_eval_loss": round(eval_losses[-1], 4) if eval_losses else "NA"})
-        row["notes"] += f"; mean_train_loss={result.training_loss:.4f}"
+                    "final_eval_loss": round(final_metrics["eval_loss"], 4)})
+        row["notes"] += (f"; mean_train_loss={result.training_loss:.4f}; final_eval_after_step="
+                         f"{trainer.state.global_step}; final_eval_s={final_eval_wall.seconds:.2f}")
 
         adapter_dir = out_dir / "final_adapter"
         model.save_pretrained(adapter_dir)   # adapter weights only, not a merged model
         tok.save_pretrained(adapter_dir)
         (out_dir / "log_history.json").write_text(json.dumps(hist, indent=1))
-        print(f"\nadapter saved to {adapter_dir}")
+        weights = adapter_dir / "adapter_model.safetensors"
+        if not weights.exists():
+            raise RuntimeError(f"adapter weights not found at {weights}")
+        adapter_sha = C.sha256_file(weights)
+        rel_adapter = str(adapter_dir.relative_to(C.REPO_ROOT)) if adapter_dir.is_relative_to(C.REPO_ROOT) else str(adapter_dir)
+        row.update({"adapter_path": rel_adapter, "adapter_sha256": adapter_sha})
+        manifest = {"run_id": run_id, "method": method, "run_label": a.run_label, "git_commit": row["git_commit"],
+                    "adapter_path": rel_adapter, "adapter_sha256": adapter_sha,
+                    "base_model": cfg["model"]["model_id"], "target_modules": targets,
+                    "frozen_data_sha256": hashes, "final_eval_loss": row["final_eval_loss"],
+                    "total_steps": trainer.state.global_step}
+        (out_dir / "run_manifest.json").write_text(json.dumps(manifest, indent=1))
+        print("\n" + "=" * 78)
+        print(("SMOKE ADAPTER (disposable, never use for DPO)" if a.run_label == "smoke" else
+               "SFT ADAPTER FOR DPO") + f":\n  path   {rel_adapter}\n  sha256 {adapter_sha}"
+              f"\n  manifest {out_dir / 'run_manifest.json'}")
 
     except torch.cuda.OutOfMemoryError as e:
         status, failure = "oom", f"CUDA OOM: {str(e).splitlines()[0][:400]}"
@@ -349,9 +384,10 @@ def main() -> int:
         if wall.seconds is None and hasattr(wall, "start"):
             import time
             wall.seconds = time.perf_counter() - wall.start
-        mem = C.peak_memory_gb()
+        phases.mark(phases.active)          # fold in the peak of the phase that was running (incl. on failure)
         st = step_timer.summary()
-        row.update(mem)
+        row.update(phases.row_fields())
+        row.update(C.allocator_stats())
         row.update({"status": status, "failure_message": failure,
                     "wall_clock_s": round(wall.seconds, 2) if wall.seconds is not None else "NA",
                     "avg_step_time_s": st["avg_step_time_s"]})
@@ -363,8 +399,11 @@ def main() -> int:
                          f"; grad_check=not_passed amp_overflow_steps={grad_check.overflow_steps}")
         path = C.append_experiment_log(row)
         print("\n" + "=" * 78 + f"\nRUN RESULT ({status}) appended to {path}")
-        for k in ("peak_allocated_gb", "peak_reserved_gb", "wall_clock_s", "avg_step_time_s", "total_steps",
-                  "final_train_loss", "final_eval_loss", "failure_message"):
+        for k in ("peak_allocated_gb", "peak_reserved_gb", "peak_allocated_load_gb", "peak_reserved_load_gb",
+                  "peak_allocated_train_gb", "peak_reserved_train_gb", "peak_allocated_eval_gb", "peak_reserved_eval_gb",
+                  "alloc_retries", "cuda_ooms", "peak_inactive_split_gb", "peak_segments", "wall_clock_s",
+                  "avg_step_time_s", "total_steps", "final_train_loss", "final_eval_loss", "adapter_path",
+                  "adapter_sha256", "python_version", "torch_cuda_build", "failure_message"):
             print(f"  {k:20s} {row.get(k, '')}")
     return 0
 
