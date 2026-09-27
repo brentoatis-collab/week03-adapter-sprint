@@ -42,6 +42,7 @@
     "fp16": true,
     "bf16": false,
     "logging_steps": 5,
+    "eval_steps": 10,
     "seed": 42,
     "output_dir": "outputs/qlora_sft",
     "_comment": "Effective batch = micro_batch_size x gradient_accumulation_steps = 16. lr 2e-4 and max_grad_norm 0.3 follow common QLoRA practice. optim adamw_torch: optimizer state for ~2M adapter params is only a few MB, so paged 8-bit optimizers are not needed at baseline."
@@ -82,7 +83,12 @@
     "_comment": "Split is by scenario FAMILY (whole families go to one side) and stratified: 5 eval examples per category, 4 eval examples per no-address location condition (6 conditions -> 24 eval no-address). Overall no-address = 6 x (6 + 4) = 60 / 400 = 15%.",
     "instruction_train_path": "data/instruction_train.jsonl",
     "instruction_eval_path": "data/instruction_eval.jsonl",
-    "preference_train_path": "data/preference_train.jsonl"
+    "preference_train_path": "data/preference_train.jsonl",
+    "frozen_sha256": {
+      "train": "367ac5814c7e51eb3db498a508f59c35acff144e03658f779e4a068a993566ae",
+      "eval": "984b459b1c40bb4db51ee559ee6b776ab84c989ea57bab660571b120dc95ae97",
+      "_frozen_at_commit": "c817629"
+    }
   },
 
   "evaluation": {

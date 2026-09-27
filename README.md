@@ -2,7 +2,7 @@
 
 **LoRA/QLoRA instruction tuning and DPO under a 15 GB GPU memory ceiling**
 
-> **Status:** Build Step 2 (instruction dataset generated + audited). No training has been run yet.
+> **Status:** Build Step 3 (QLoRA training code + local CPU validation). No GPU training has been run yet.
 > Every result field in this README is empty until it is filled from real Colab execution.
 
 ---
@@ -289,9 +289,100 @@ only if a genuine defect is found, and any such change is committed separately w
 
 | Topic | Status |
 |---|---|
+### 7.2 Training infrastructure, chat template and loss masking (Step 3)
+
+**Files.**
+- [training/common.py](training/common.py) is the single source of truth for SFT, DPO and
+  evaluation. It holds the system prompt, formatting, masking, instrumentation and the logger.
+- [training/train_qlora.py](training/train_qlora.py) is the SFT entry point.
+- [training/check_masking.py](training/check_masking.py) prints the masking diagnostic.
+- [training/validate_local.py](training/validate_local.py) runs the CPU-only checks.
+
+**System prompt.** The same `SYSTEM_PROMPT` is used for training and for all three evaluated
+models. It states the output contract, the categories, the urgency criteria, the clarification
+rule and the address rule. It is **312 tokens** and is masked in every example.
+
+**Assistant-only masking (decision E).** The Qwen2.5 chat template has **no
+`{% generation %}` tag**. The built-in `return_assistant_tokens_mask=True` silently returns
+an **all-zero mask** (verified), so it cannot be used. Instead, for each example:
+
+1. Render system + user with `apply_chat_template(add_generation_prompt=True)`. This is the
+   prompt, ending at `<|im_start|>assistant\n`.
+2. Render the full system + user + assistant conversation.
+3. Require the prompt ids to be an **exact prefix** of the full ids.
+4. Labels are `-100` for every prompt position. The assistant JSON and its end-of-turn token
+   `<|im_end|>` (the EOS the model must learn to emit) are trainable. The template's trailing
+   `\n` after `<|im_end|>` is masked, because generation stops at EOS and never produces it.
+5. Fail loudly if: the prompt is not a prefix; there is no end-of-turn; there are no trainable
+   tokens; every token is trainable; the assistant region is only the EOS token; the decoded
+   trainable region doesn't reproduce the target JSON; or the sequence exceeds
+   `max_seq_length`. **Over-length examples are rejected, never truncated.**
+
+Local verification: all 400 records pass. HF's loss equals a manual cross-entropy computed
+over assistant tokens only. Gradients reach all 96 `lora_B` tensors and no base parameter.
+
+**Measured sequence lengths** (real tokenizer, full conversation):
+
+| Split | Total tokens min / median / p95 / max | Trainable tokens min / median / max | Loss-bearing share |
+|---|---|---|---|
+| train (340) | 364 / 396 / 425 / 457 | 39 / 52 / 70 | 13.1% |
+| eval (60) | 367 / 400 / 427 / 430 | 43 / 53 / 66 | 13.2% |
+
+The complaints themselves are short, but the fixed 312-token system prompt puts full
+sequences within **55 tokens of the 512 ceiling**. Lowering `max_seq_length` below about 460
+would reject examples. That limits what the memory-stress diagnosis can change.
+
+**Architecture verification (measured locally, fp32 CPU, not quantized).** These are the
+linear modules found in the loaded model. Targets are verified before the LoRA config is
+built, and a missing target is a hard error with no substitution.
+
+| Module | Count | (in, out) |
+|---|---|---|
+| q_proj | 24 | (896, 896) |
+| k_proj | 24 | (896, 128) |
+| v_proj | 24 | (896, 128) |
+| o_proj | 24 | (896, 896) |
+| gate_proj / up_proj | 24 each | (896, 4864) |
+| down_proj | 24 | (4864, 896) |
+| lm_head | 1 | (896, 151936), tied to the input embedding |
+
+**Trainable parameters (measured).**
+- The base model has 494,032,768 parameters.
+- LoRA r=16 on q/k/v/o adds **2,162,688 trainable parameters** across 96 wrapped modules.
+- That is 0.4359% of the post-LoRA total (0.4378% of the base).
+- This matches the arithmetic prediction exactly: per layer, q and o each add 16 × (896 + 896)
+  = 28,672, and k and v each add 16 × (896 + 128) = 16,384. That is 90,112 per layer, times 24
+  layers.
+- In the 4-bit CUDA path, the stored parameter count is lower because 4-bit weights are packed.
+  The trainable count does not change.
+
+**API corrections for the pinned stack** (read from the installed source, not assumed):
+
+| Assumed | Actual in transformers 5.17.0 / peft 0.21.0 | Handling |
+|---|---|---|
+| `warmup_ratio=0.1` | argument **does not exist** | `warmup_steps=0.1` (a float in [0, 1) is a ratio) |
+| `apply_chat_template(tokenize=True)` returns ids | returns a `BatchEncoding` dict (`return_dict=True` default) | read `["input_ids"]` |
+| `return_assistant_tokens_mask` usable | template lacks `{% generation %}`, so the mask is all zeros | explicit prefix masking |
+| NaN/inf losses visible in logs | `logging_nan_inf_filter=True` by default **hides them** | set to `False`, plus a per-step finiteness check that raises |
+| OOM surfaces as an error | `auto_find_batch_size` can silently retry smaller batches | forced `False`; an OOM is logged and re-raised |
+| `torch_dtype=` | deprecated | `dtype=` |
+| `prepare_model_for_kbit_training` only freezes | it also upcasts **all** non-4-bit fp16/bf16 params (embeddings, norms, tied lm_head) to fp32, and enables checkpointing | expected, and counted in the memory interpretation |
+
+**Instrumentation.**
+- Peak allocated and reserved memory are measured with `torch.cuda.max_memory_*` after
+  `reset_peak_memory_stats()` is called **just before model load**, so the peak covers loading
+  plus training.
+- Wall-clock time covers `trainer.train()`.
+- Average step time is the mean optimizer-step duration, CUDA-synchronized, excluding the first
+  step and excluding evaluation.
+- Every CUDA run, successful or failed, appends one row to `logs/experiment_log.csv`.
+- Without CUDA, memory fields are recorded as `NA_no_cuda`, never as numbers.
+
+| Topic | Status |
+|---|---|
 | Instruction dataset design + audit | done (see 7.1) |
-| Chat template + assistant-only loss masking (decision E: plain HF `Trainer`, explicit `-100` masking, `<\|im_end\|>` included in the trained region) | *Step 3* |
-| Memory/time instrumentation (`torch.cuda.reset_peak_memory_stats`, `max_memory_allocated`, `max_memory_reserved`, wall clock, per-step time) | *Step 3* |
+| Chat template + assistant-only loss masking | done, verified locally (see 7.2) |
+| Memory/time instrumentation | implemented; **no measurements yet** (needs Colab) |
 | Preference dataset design + shortcut audit | *Step 4* |
 | DPO (β = 0.1; reference = frozen SFT adapter, **not** the adapter-disabled base) | *Step 5* |
 | Evaluation methodology | *Step 6* |
@@ -352,15 +443,29 @@ The same held-out complaints are scored for all three models with greedy decodin
    raise this count.
 3. **The no-address subset is deliberately enriched in eval** (40% of eval vs 10.6% of train)
    to measure safety. Aggregate eval scores are not estimates of production accuracy.
-4. **The workload is short.** CivicDesk complaints are far below the 512-token ceiling (token
-   counts measured in Step 3). Any long-sequence memory run is labeled a **controlled stress
-   test**, not a representative workload.
+4. **Complaints are short, but training sequences are not.** *(Corrected in Step 3 after
+   measurement.)* Complaint text is short, but each training sequence also carries a 312-token
+   system prompt, so real sequences are 364–457 tokens against the 512 ceiling. The
+   representative workload is about 400 tokens per sequence. Any run with longer sequences, or
+   with micro-batches far above baseline, is labeled a **controlled stress test**, not a
+   representative workload.
 5. **Summary quality is not a primary quantitative metric** and will not be claimed as one.
    Summaries are shown side by side for qualitative inspection only.
 
 ---
 
 ## 10. Reproducibility
+
+**Local CPU validation** (no GPU; does not train or quantize):
+
+```bash
+python3.11 -m venv .venv          # 3.12 preferred (it matches Colab); 3.11 was used locally
+.venv/bin/pip install "torch>=2.4,<3" transformers==5.17.0 peft==0.21.0 accelerate==1.15.0
+.venv/bin/python training/check_masking.py            # masking diagnostic on real records
+.venv/bin/python training/train_qlora.py --dry-run    # config + data + masking, no model
+.venv/bin/python training/train_qlora.py --inspect-cpu  # fp32 architecture + LoRA count
+.venv/bin/python training/validate_local.py           # CPU checks, no training
+```
 
 *Full Colab instructions arrive with the notebook (Step 7).* In outline:
 
