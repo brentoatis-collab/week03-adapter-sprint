@@ -2,7 +2,7 @@
 
 **LoRA/QLoRA instruction tuning and DPO under a 15 GB GPU memory ceiling**
 
-> **Status:** Build Step 4 (DPO preference dataset + audit). Only a 5-step QLoRA smoke run has been executed on GPU; no full SFT or DPO training yet.
+> **Status:** Build Step 5B (DPO path implemented and CPU-validated; not yet run). GPU runs so far: 5-step QLoRA smoke test and the full baseline QLoRA SFT run.
 > Every result field in this README is empty until it is filled from real Colab execution.
 
 ---
@@ -510,13 +510,88 @@ objective was fitted, not how well the model generalizes, and it is never report
 accuracy. Generalization is assessed only by the held-out three-way (base vs SFT vs DPO)
 behavioral evaluation on the frozen eval set (§9).
 
+### 7.4 DPO training path (Step 5B)
+
+**Files.**
+- [training/train_dpo.py](training/train_dpo.py) is the entry point.
+- [training/validate_dpo_local.py](training/validate_dpo_local.py) holds the CPU checks.
+- [notebooks/week03_dpo.ipynb](notebooks/week03_dpo.ipynb) is the Colab path.
+
+**Starting point.** DPO starts from the baseline SFT adapter of run
+`qlora_sft-baseline-20260927T235802Z`, with adapter SHA-256
+`53aa9a93d6ef1011a3d9395283c62db51d6f327f4671cc3a59c9bf3d3dc85b5a`. The run stops unless
+the restored file hashes to that value **and** the value equals the `adapter_sha256` of that
+completed baseline row in the experiment log. The notebook restores the adapter from Google
+Drive, and a smoke adapter is refused.
+
+**Architecture** (TRL 1.14.0 / peft 0.21.0, verified by reading the installed source and by CPU
+tests):
+
+| Component | Implementation |
+|---|---|
+| Base | One NF4 4-bit base, loaded and prepared exactly as in SFT |
+| Policy | The SFT adapter, loaded **trainable** (`is_trainable=True`) as adapter `default` |
+| Reference | TRL's **built-in frozen copy** of the SFT adapter, adapter `ref`, on the same base. DPOTrainer creates it when given a `PeftModel` and `ref_model=None`. Reference log-probs are computed under `no_grad` with `ref` active. |
+| Not used | a merged model; the adapter-disabled base as reference; a second base model |
+
+**API findings that changed the Step 1 plan.**
+- **The config fields don't exist.** The plan assumed `DPOConfig(model_adapter_name, ref_adapter_name)`. Those fields do **not** exist in TRL 1.14, and neither does `max_prompt_length`. The dual-adapter design is still achieved, through TRL's own `ref` copy.
+- **TRL casts the trainable adapter of a quantized model to bf16.** This follows the QLoRA
+  paper. On our T4/fp16 setup it would:
+  - make the starting policy differ from the verified SFT adapter (CPU simulation: up to
+    1.2e-4 difference, with non-zero step-0 rewards)
+  - train bf16 master weights at LR 5e-5
+  - depart from the SFT regime of fp32 adapters under fp16 autocast
+  
+  `policy_adapter_dtype = fp32` (default) restores the policy from the fp32 `ref` copy after
+  TRL initialization and before the optimizer exists. It then verifies **policy == ref ==
+  adapter file bit-for-bit**. `--policy-adapter-dtype trl_default` keeps TRL's behavior.
+- **TRL's own defaults are unsuitable here** (`bf16=True`, `learning_rate=1e-6`,
+  `logging_nan_inf_filter=True`, fused AdamW, `max_length=1024`, `max_grad_norm=1.0`). All of
+  them are set explicitly: fp16, 5e-5, NaN visible, `adamw_torch`, 512, 0.3.
+- **TRL names its evaluation reward metrics `eval_rewards/*`** regardless of
+  `metric_key_prefix`. This was caught on CPU and is handled in `dpo_eval_metrics`, which fails
+  loudly if a key is missing.
+- **TRL only *warns* on a prompt/completion token-prefix mismatch.** It also truncates silently
+  at `max_length` with `keep_start`. A pre-check on all 300 sequences **fails** instead. All
+  pairs pass: 360–439 tokens, well under 512.
+- **Dropout is disabled** (`disable_dropout=True`), so SFT's LoRA dropout of 0.05 is off during
+  DPO.
+- **The template's trailing `\n` after `<|im_end|>` is part of both completions.** SFT masked
+  it. It is identical in chosen and rejected.
+
+**Step-0 reference check.** Before training, one evaluation pass over the 150 pairs must give
+rewards of about 0 (policy == reference). On CPU this gave exactly 0.0, with a loss of exactly
+ln 2 = 0.693147.
+
+**Plan.**
+- β = 0.1, sigmoid loss, LR 5e-5, cosine schedule, warmup ratio 0.1, 1 epoch.
+- 2 pairs per micro-batch × 8 accumulation = 16 pairs per step.
+- **10 optimizer steps**: 75 micro-batches = 9 × 8 + 3, and the last step uses 6 pairs.
+  Warmup is 1 step.
+- Loss is logged every step.
+
+**Metrics.**
+- Per-step: loss, `rewards/chosen`, `rewards/rejected`, `rewards/margins`, `rewards/accuracies`.
+- After training, one full pass over the same 150 pairs populates `train_set_reward_accuracy`,
+  `train_set_reward_margin`, `train_set_chosen_reward` and `train_set_rejected_reward`. These
+  are **training-set** metrics.
+- The log also records `sft_adapter_sha256`, `preference_data_sha256`, `policy_adapter_dtype`
+  and `ref_check_max_abs_reward`. The DPO adapter is saved with `selected_adapters=["default"]`,
+  so the `ref` copy is never saved.
+
+**Interpretation limit.** A rising training-set reward accuracy is **not** evidence of better
+address grounding. DPO could exploit the documented 0.663 response-only digit-count shortcut
+(§7.3). Only the held-out three-way evaluation measures fabrication and over-conservative null
+behavior.
+
 | Topic | Status |
 |---|---|
 | Instruction dataset design + audit | done (see 7.1) |
 | Chat template + assistant-only loss masking | done, verified locally (see 7.2) |
-| Memory/time instrumentation | exercised in the 5-step T4 smoke run (`logs/experiment_log.csv`); no full-run measurements yet |
+| Memory/time instrumentation | measured in the smoke and full SFT runs (`logs/experiment_log.csv`) |
 | Preference dataset design + shortcut audit | done (see 7.3) |
-| DPO (β = 0.1; reference = frozen SFT adapter, **not** the adapter-disabled base) | *Step 5* |
+| DPO training path | implemented, CPU-validated; **not yet run** (see 7.4) |
 | Evaluation methodology | *Step 6* |
 
 ---
@@ -528,7 +603,8 @@ behavioral evaluation on the frozen eval set (§9).
 | Run ID | Method | Seq len | Micro-batch | Grad accum | Peak alloc (GiB) | Peak reserved (GiB) | Wall clock (s) | Avg step (s) | Status |
 |---|---|---|---|---|---|---|---|---|---|
 | qlora_sft_smoke-smoke-20260927T220352Z | qlora_sft_smoke (5 steps) | 512 | 4 | 4 | 4.122 | 13.221 | 14.75 | 2.1643 | completed |
-| *full SFT: pending* | | | | | | | | | |
+| qlora_sft-baseline-20260927T235802Z | qlora_sft (full, 66 steps) | 512 | 4 | 4 | 4.244 | 14.256 | 166.49 | 2.1919 | completed |
+| *DPO: pending* | | | | | | | | | |
 
 The smoke row is a 5-step execution check, **not** an SFT result. Its losses (train 0.6475,
 eval 0.9421) describe 5 steps only.

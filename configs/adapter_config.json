@@ -51,7 +51,8 @@
 
   "dpo": {
     "beta": 0.1,
-    "learning_rate": 5e-5,
+    "loss_type": "sigmoid",
+    "learning_rate": 5e-05,
     "num_train_epochs": 1,
     "micro_batch_size": 2,
     "gradient_accumulation_steps": 8,
@@ -60,16 +61,19 @@
     "lr_scheduler_type": "cosine",
     "warmup_ratio": 0.1,
     "max_grad_norm": 0.3,
+    "optim": "adamw_torch",
+    "weight_decay": 0.0,
     "fp16": true,
     "bf16": false,
-    "logging_steps": 2,
+    "logging_steps": 1,
     "seed": 42,
+    "policy_adapter_dtype": "fp32",
+    "sft_run_id": "qlora_sft-baseline-20260927T235802Z",
+    "expected_sft_adapter_sha256": "53aa9a93d6ef1011a3d9395283c62db51d6f327f4671cc3a59c9bf3d3dc85b5a",
     "sft_adapter_dir": null,
-    "_sft_adapter_note": "Set explicitly (CLI) to the adapter_path of the completed baseline SFT row in logs/experiment_log.csv (outputs/qlora_sft/<run_id>/final_adapter) and verify adapter_sha256. Never outputs/smoke_adapter/.",
+    "_sft_adapter_note": "Pass --sft-adapter-dir explicitly (the restored copy of the logged baseline SFT final_adapter). Its adapter_model.safetensors must hash to expected_sft_adapter_sha256, which must also equal the adapter_sha256 of the completed baseline row sft_run_id in logs/experiment_log.csv. Never outputs/smoke_adapter/.",
     "output_dir": "outputs/dpo",
-    "model_adapter_name": "train",
-    "ref_adapter_name": "reference",
-    "_comment": "Short DPO pass after SFT. Reference = the frozen SFT adapter loaded a second time under ref_adapter_name, NOT the adapter-disabled base model. Values here will be mapped onto the pinned trl==1.14.0 DPOConfig; the mapping is verified when train_dpo.py is written (Step 5)."
+    "_comment": "Short DPO pass after SFT. Policy = the SFT adapter loaded trainable as 'default'. Reference = TRL 1.14's built-in frozen copy of that adapter under the name 'ref' (DPOTrainer with a PeftModel and ref_model=None), on the same 4-bit base, NOT the adapter-disabled base and NOT a merged model. TRL 1.14 has no model_adapter_name/ref_adapter_name config fields (verified in source). policy_adapter_dtype=fp32 undoes TRL's quantized-model bf16 cast of the trainable adapter so the policy starts bit-identical to the SFT adapter (see README 7.4)."
   },
 
   "data": {
@@ -97,6 +101,7 @@
     "frozen_sha256": {
       "train": "367ac5814c7e51eb3db498a508f59c35acff144e03658f779e4a068a993566ae",
       "eval": "984b459b1c40bb4db51ee559ee6b776ab84c989ea57bab660571b120dc95ae97",
+      "preference": "8dca76473595506a43cfa99ac7ea8694ac22b87c14dbb3ca5c729d80dfa71b92",
       "_frozen_at_commit": "c817629"
     }
   },
