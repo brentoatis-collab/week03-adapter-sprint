@@ -1,0 +1,160 @@
+{
+ "eval_id": "three_way-20260928T015358Z",
+ "timestamp_utc": "2026-09-28T02:06:45Z",
+ "git_commit": "72633b5-dirty",
+ "gpu_name": "Tesla T4",
+ "packages": {
+  "torch": "2.11.0+cu128",
+  "transformers": "5.17.0",
+  "peft": "0.21.0",
+  "trl": "1.14.0",
+  "bitsandbytes": "0.50.2",
+  "accelerate": "1.15.0",
+  "datasets": "5.0.1"
+ },
+ "environment": {
+  "python_version": "3.13.15",
+  "torch_cuda_build": "12.8",
+  "cudnn_version": 91900,
+  "cuda_alloc_conf": "unset",
+  "gpu_capability": "7.5",
+  "gpu_total_memory_gb": 14.563
+ },
+ "model_id": "Qwen/Qwen2.5-0.5B-Instruct",
+ "quantization": {
+  "load_in_4bit": true,
+  "bnb_4bit_quant_type": "nf4",
+  "bnb_4bit_use_double_quant": true,
+  "bnb_4bit_compute_dtype": "float16",
+  "_comment": "QLoRA demonstration: NF4 frozen base weights + double quantization. Compute dtype is float16 because the T4 has no bf16 support. A 0.5B model does NOT require 4-bit to fit on a T4; quantization is used to demonstrate the technique under the assignment constraint."
+ },
+ "adapters": {
+  "sft": {
+   "run_id": "qlora_sft-baseline-20260927T235802Z",
+   "path": "outputs/qlora_sft/qlora_sft-baseline-20260927T235802Z/final_adapter",
+   "sha256": "53aa9a93d6ef1011a3d9395283c62db51d6f327f4671cc3a59c9bf3d3dc85b5a",
+   "trained_at_commit": "f372d92"
+  },
+  "dpo": {
+   "run_id": "dpo-baseline-20260928T010519Z",
+   "path": "outputs/dpo/dpo-baseline-20260928T010519Z/final_adapter",
+   "sha256": "d3dbda1ad2d7fb908bf95b8fc407264239c2d78fc37ea125b5ced715199f38f7",
+   "trained_at_commit": "ebe6b54"
+  }
+ },
+ "adapters_loaded_check": {
+  "sft": {
+   "lora_tensors": 192,
+   "max_abs_diff_vs_file": 0.0
+  },
+  "dpo": {
+   "lora_tensors": 192,
+   "max_abs_diff_vs_file": 0.0
+  }
+ },
+ "switching_probe": {
+  "sft_vs_base": 11.59782600402832,
+  "dpo_vs_sft": 2.7909629344940186,
+  "sft_repeat": 0.0,
+  "base_repeat": 0.0
+ },
+ "states": [
+  "base",
+  "sft",
+  "dpo"
+ ],
+ "eval_data_sha256": "984b459b1c40bb4db51ee559ee6b776ab84c989ea57bab660571b120dc95ae97",
+ "population": {
+  "total": 60,
+  "exact_address": 36,
+  "no_address": 24,
+  "by_condition": {
+   "intersection": 4,
+   "missing": 4,
+   "vague": 4,
+   "block_range": 4,
+   "street_only": 4,
+   "landmark": 4
+  },
+  "street_only": {
+   "actionable": 2,
+   "clarify": 2
+  }
+ },
+ "generation_config_passed": {
+  "max_new_tokens": 192,
+  "do_sample": false,
+  "num_beams": 1,
+  "repetition_penalty": 1.0,
+  "pad_token_id": 151643,
+  "bos_token_id": 151643,
+  "eos_token_id": [
+   151645,
+   151643
+  ],
+  "transformers_version": "5.17.0"
+ },
+ "generation_config_effective": {
+  "do_sample": false,
+  "num_beams": 1,
+  "max_new_tokens": 192,
+  "repetition_penalty": 1.0,
+  "eos_token_id": [
+   151645,
+   151643
+  ],
+  "pad_token_id": 151643,
+  "temperature": 0.7,
+  "top_k": 20,
+  "top_p": 0.8
+ },
+ "batch_size": 1,
+ "autocast_fp16": true,
+ "system_prompt_sha256": "a6aa9a794069cbe369bcfea194ed96d4052e36fb3cf90568713eef47312cb790",
+ "scoring_rules_version": "2026-09-28.v1",
+ "scoring_rules_sha256": "533352d4de73e672ab6cbe4dce3acf88008a48ea4c42d27720506579fa2393d0",
+ "evaluate_models_sha256": "8e8c0e56ee1701d6dbdd378caef654c8c107aba73518db775f43d3272faee17f",
+ "scoring_self_test": {
+  "gold_perfect": true,
+  "always_null_over_null": 36,
+  "always_null_fabrication": 0,
+  "always_fabricate_fabrication": 24
+ },
+ "determinism_probe": {
+  "base": "5/5 identical",
+  "sft": "5/5 identical",
+  "dpo": "5/5 identical"
+ },
+ "determinism_probe_generations": 15,
+ "primary_generations": 180,
+ "per_state": {
+  "base": {
+   "seconds": 217.86,
+   "new_tokens": 3799
+  },
+  "sft": {
+   "seconds": 240.32,
+   "new_tokens": 3061
+  },
+  "dpo": {
+   "seconds": 240.63,
+   "new_tokens": 3055
+  }
+ },
+ "comparison_type": "controlled three-way model-state comparison (one NF4 base, identical fp32 upcast, fp16 autocast, prompts, template, greedy decoding, order); not a stock-inference benchmark",
+ "wall_clock_s": 766.46,
+ "memory_peak_allocated_gb": 0.974,
+ "memory_peak_reserved_gb": 0.996,
+ "memory_peak_allocated_load_gb": 0.934,
+ "memory_peak_reserved_load_gb": 0.984,
+ "memory_peak_allocated_train_gb": "NA_phase_not_reached",
+ "memory_peak_reserved_train_gb": "NA_phase_not_reached",
+ "memory_peak_allocated_eval_gb": "NA_phase_not_reached",
+ "memory_peak_reserved_eval_gb": "NA_phase_not_reached",
+ "allocator": {
+  "alloc_retries": 0,
+  "cuda_ooms": 0,
+  "peak_inactive_split_gb": 0.269,
+  "peak_segments": 36
+ }
+}

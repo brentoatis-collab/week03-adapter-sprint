@@ -1,0 +1,523 @@
+{
+ "population": {
+  "total": 60,
+  "exact_address": 36,
+  "no_address": 24,
+  "no_address_by_condition": {
+   "intersection": 4,
+   "missing": 4,
+   "vague": 4,
+   "block_range": 4,
+   "street_only": 4,
+   "landmark": 4
+  }
+ },
+ "majority_urgency_per_category_baseline": {
+  "n": 30,
+  "d": 60,
+  "rate": 0.5
+ },
+ "base": {
+  "parse_mode": {
+   "strict": 59,
+   "none": 1
+  },
+  "contract_compliant": {
+   "n": 39,
+   "d": 60,
+   "rate": 0.65
+  },
+  "key_order_exact": {
+   "n": 47,
+   "d": 60,
+   "rate": 0.7833
+  },
+  "category_correct": {
+   "n": 5,
+   "d": 60,
+   "rate": 0.0833
+  },
+  "urgency_correct": {
+   "n": 14,
+   "d": 60,
+   "rate": 0.2333
+  },
+  "location_exact": {
+   "n": 22,
+   "d": 60,
+   "rate": 0.3667
+  },
+  "location_anchor": {
+   "n": 49,
+   "d": 60,
+   "rate": 0.8167
+  },
+  "clarification_correct": {
+   "n": 49,
+   "d": 60,
+   "rate": 0.8167
+  },
+  "summary_exact": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "core_correct": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "full_exact_match": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "summary_unsupported_address": {
+   "n": 1,
+   "d": 60,
+   "rate": 0.0167
+  },
+  "A_unsupported_exact_address_fabrication": {
+   "n": 0,
+   "d": 24,
+   "rate": 0.0
+  },
+  "invalid_non_null_address_field": {
+   "n": 0,
+   "d": 24,
+   "rate": 0.0
+  },
+  "B_retention_exact": {
+   "n": 0,
+   "d": 36,
+   "rate": 0.0
+  },
+  "B_retention_incl_suffix_variant": {
+   "n": 0,
+   "d": 36,
+   "rate": 0.0
+  },
+  "C_over_null": {
+   "n": 35,
+   "d": 36,
+   "rate": 0.9722
+  },
+  "correct_null": {
+   "n": 24,
+   "d": 24,
+   "rate": 1.0
+  },
+  "address_correct_overall": {
+   "n": 24,
+   "d": 60,
+   "rate": 0.4
+  },
+  "exact_address_outcomes": {
+   "over_null": 35,
+   "unscorable": 1
+  },
+  "no_address_outcomes": {
+   "correct_null": 24
+  },
+  "no_address_by_condition": {
+   "block_range": {
+    "correct_null": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "intersection": {
+    "correct_null": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "landmark": {
+    "correct_null": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "missing": {
+    "correct_null": 4,
+    "clarification_correct": 0,
+    "n": 4
+   },
+   "street_only/actionable": {
+    "correct_null": 2,
+    "clarification_correct": 2,
+    "n": 2
+   },
+   "street_only/clarify": {
+    "correct_null": 2,
+    "clarification_correct": 0,
+    "n": 2
+   },
+   "vague": {
+    "correct_null": 4,
+    "clarification_correct": 0,
+    "n": 4
+   }
+  },
+  "urgency_by_level": {
+   "low": {
+    "n": 0,
+    "d": 9,
+    "rate": 0.0
+   },
+   "medium": {
+    "n": 0,
+    "d": 34,
+    "rate": 0.0
+   },
+   "high": {
+    "n": 14,
+    "d": 14,
+    "rate": 1.0
+   },
+   "emergency": {
+    "n": 0,
+    "d": 3,
+    "rate": 0.0
+   }
+  },
+  "flag_counts": {
+   "location_anchor_only": 27,
+   "summary_unsupported_address": 1,
+   "no_eos_max_new_tokens_reached": 1
+  }
+ },
+ "sft": {
+  "parse_mode": {
+   "strict": 60
+  },
+  "contract_compliant": {
+   "n": 58,
+   "d": 60,
+   "rate": 0.9667
+  },
+  "key_order_exact": {
+   "n": 60,
+   "d": 60,
+   "rate": 1.0
+  },
+  "category_correct": {
+   "n": 36,
+   "d": 60,
+   "rate": 0.6
+  },
+  "urgency_correct": {
+   "n": 26,
+   "d": 60,
+   "rate": 0.4333
+  },
+  "location_exact": {
+   "n": 38,
+   "d": 60,
+   "rate": 0.6333
+  },
+  "location_anchor": {
+   "n": 52,
+   "d": 60,
+   "rate": 0.8667
+  },
+  "clarification_correct": {
+   "n": 50,
+   "d": 60,
+   "rate": 0.8333
+  },
+  "summary_exact": {
+   "n": 1,
+   "d": 60,
+   "rate": 0.0167
+  },
+  "core_correct": {
+   "n": 11,
+   "d": 60,
+   "rate": 0.1833
+  },
+  "full_exact_match": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "summary_unsupported_address": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "A_unsupported_exact_address_fabrication": {
+   "n": 1,
+   "d": 24,
+   "rate": 0.0417
+  },
+  "invalid_non_null_address_field": {
+   "n": 22,
+   "d": 24,
+   "rate": 0.9167
+  },
+  "B_retention_exact": {
+   "n": 34,
+   "d": 36,
+   "rate": 0.9444
+  },
+  "B_retention_incl_suffix_variant": {
+   "n": 34,
+   "d": 36,
+   "rate": 0.9444
+  },
+  "C_over_null": {
+   "n": 0,
+   "d": 36,
+   "rate": 0.0
+  },
+  "correct_null": {
+   "n": 2,
+   "d": 24,
+   "rate": 0.0833
+  },
+  "address_correct_overall": {
+   "n": 36,
+   "d": 60,
+   "rate": 0.6
+  },
+  "exact_address_outcomes": {
+   "retained_exact": 34,
+   "wrong_address": 2
+  },
+  "no_address_outcomes": {
+   "non_address_value": 21,
+   "fabricated_address": 1,
+   "correct_null": 2
+  },
+  "no_address_by_condition": {
+   "block_range": {
+    "fabricated_address": 1,
+    "clarification_correct": 4,
+    "n": 4,
+    "non_address_value": 3
+   },
+   "intersection": {
+    "non_address_value": 4,
+    "clarification_correct": 3,
+    "n": 4
+   },
+   "landmark": {
+    "non_address_value": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "missing": {
+    "non_address_value": 2,
+    "clarification_correct": 0,
+    "n": 4,
+    "correct_null": 2
+   },
+   "street_only/actionable": {
+    "non_address_value": 2,
+    "clarification_correct": 2,
+    "n": 2
+   },
+   "street_only/clarify": {
+    "non_address_value": 2,
+    "clarification_correct": 0,
+    "n": 2
+   },
+   "vague": {
+    "non_address_value": 4,
+    "clarification_correct": 1,
+    "n": 4
+   }
+  },
+  "urgency_by_level": {
+   "low": {
+    "n": 3,
+    "d": 9,
+    "rate": 0.3333
+   },
+   "medium": {
+    "n": 20,
+    "d": 34,
+    "rate": 0.5882
+   },
+   "high": {
+    "n": 3,
+    "d": 14,
+    "rate": 0.2143
+   },
+   "emergency": {
+    "n": 0,
+    "d": 3,
+    "rate": 0.0
+   }
+  },
+  "flag_counts": {
+   "address_non_address_value": 21,
+   "location_anchor_only": 14,
+   "category_is_other_mentioned_issue": 2
+  }
+ },
+ "dpo": {
+  "parse_mode": {
+   "strict": 60
+  },
+  "contract_compliant": {
+   "n": 58,
+   "d": 60,
+   "rate": 0.9667
+  },
+  "key_order_exact": {
+   "n": 60,
+   "d": 60,
+   "rate": 1.0
+  },
+  "category_correct": {
+   "n": 38,
+   "d": 60,
+   "rate": 0.6333
+  },
+  "urgency_correct": {
+   "n": 31,
+   "d": 60,
+   "rate": 0.5167
+  },
+  "location_exact": {
+   "n": 37,
+   "d": 60,
+   "rate": 0.6167
+  },
+  "location_anchor": {
+   "n": 51,
+   "d": 60,
+   "rate": 0.85
+  },
+  "clarification_correct": {
+   "n": 48,
+   "d": 60,
+   "rate": 0.8
+  },
+  "summary_exact": {
+   "n": 1,
+   "d": 60,
+   "rate": 0.0167
+  },
+  "core_correct": {
+   "n": 13,
+   "d": 60,
+   "rate": 0.2167
+  },
+  "full_exact_match": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "summary_unsupported_address": {
+   "n": 0,
+   "d": 60,
+   "rate": 0.0
+  },
+  "A_unsupported_exact_address_fabrication": {
+   "n": 0,
+   "d": 24,
+   "rate": 0.0
+  },
+  "invalid_non_null_address_field": {
+   "n": 24,
+   "d": 24,
+   "rate": 1.0
+  },
+  "B_retention_exact": {
+   "n": 34,
+   "d": 36,
+   "rate": 0.9444
+  },
+  "B_retention_incl_suffix_variant": {
+   "n": 34,
+   "d": 36,
+   "rate": 0.9444
+  },
+  "C_over_null": {
+   "n": 0,
+   "d": 36,
+   "rate": 0.0
+  },
+  "correct_null": {
+   "n": 0,
+   "d": 24,
+   "rate": 0.0
+  },
+  "address_correct_overall": {
+   "n": 34,
+   "d": 60,
+   "rate": 0.5667
+  },
+  "exact_address_outcomes": {
+   "retained_exact": 34,
+   "wrong_address": 2
+  },
+  "no_address_outcomes": {
+   "non_address_value": 24
+  },
+  "no_address_by_condition": {
+   "block_range": {
+    "non_address_value": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "intersection": {
+    "non_address_value": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "landmark": {
+    "non_address_value": 4,
+    "clarification_correct": 4,
+    "n": 4
+   },
+   "missing": {
+    "non_address_value": 4,
+    "clarification_correct": 0,
+    "n": 4
+   },
+   "street_only/actionable": {
+    "non_address_value": 2,
+    "clarification_correct": 2,
+    "n": 2
+   },
+   "street_only/clarify": {
+    "non_address_value": 2,
+    "clarification_correct": 0,
+    "n": 2
+   },
+   "vague": {
+    "non_address_value": 4,
+    "clarification_correct": 1,
+    "n": 4
+   }
+  },
+  "urgency_by_level": {
+   "low": {
+    "n": 5,
+    "d": 9,
+    "rate": 0.5556
+   },
+   "medium": {
+    "n": 22,
+    "d": 34,
+    "rate": 0.6471
+   },
+   "high": {
+    "n": 4,
+    "d": 14,
+    "rate": 0.2857
+   },
+   "emergency": {
+    "n": 0,
+    "d": 3,
+    "rate": 0.0
+   }
+  },
+  "flag_counts": {
+   "address_non_address_value": 24,
+   "location_anchor_only": 14,
+   "category_is_other_mentioned_issue": 2
+  }
+ }
+}
