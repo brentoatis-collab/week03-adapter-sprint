@@ -2,7 +2,7 @@
 
 **LoRA/QLoRA instruction tuning and DPO under a 15 GB GPU memory ceiling**
 
-> **Status:** Build Step 5B (DPO path implemented and CPU-validated; not yet run). GPU runs so far: 5-step QLoRA smoke test and the full baseline QLoRA SFT run.
+> **Status:** Build Step 6 (three-way evaluation implemented and CPU-validated; not yet run). GPU runs so far: smoke test, full baseline QLoRA SFT, baseline DPO.
 > Every result field in this README is empty until it is filled from real Colab execution.
 
 ---
@@ -592,7 +592,7 @@ behavior.
 | Memory/time instrumentation | measured in the smoke and full SFT runs (`logs/experiment_log.csv`) |
 | Preference dataset design + shortcut audit | done (see 7.3) |
 | DPO training path | implemented, CPU-validated; **not yet run** (see 7.4) |
-| Evaluation methodology | *Step 6* |
+| Three-way evaluation (BASE vs SFT vs DPO) | implemented, CPU-validated; **not yet run** (see 9.1) |
 
 ---
 
@@ -604,7 +604,7 @@ behavior.
 |---|---|---|---|---|---|---|---|---|---|
 | qlora_sft_smoke-smoke-20260927T220352Z | qlora_sft_smoke (5 steps) | 512 | 4 | 4 | 4.122 | 13.221 | 14.75 | 2.1643 | completed |
 | qlora_sft-baseline-20260927T235802Z | qlora_sft (full, 66 steps) | 512 | 4 | 4 | 4.244 | 14.256 | 166.49 | 2.1919 | completed |
-| *DPO: pending* | | | | | | | | | |
+| dpo-baseline-20260928T010519Z | dpo (10 steps; batch in pairs) | 512 | 2 | 8 | 3.626 | 13.715 | 53.89 | 5.215 | completed |
 
 The smoke row is a 5-step execution check, **not** an SFT result. Its losses (train 0.6475,
 eval 0.9421) describe 5 steps only.
@@ -650,20 +650,143 @@ occurs within the 15 GB ceiling.*
 
 ## 9. Evaluation — **to be populated only from real outputs**
 
-The same held-out complaints are scored for all three models with greedy decoding.
+### 9.1 Frozen protocol (Step 6; fixed before any evaluation output existed)
+
+**Files.**
+- [scripts/evaluate_models.py](scripts/evaluate_models.py) is the runner.
+- [scripts/eval_scoring.py](scripts/eval_scoring.py) holds the frozen rules. Its SHA-256 goes
+  into every manifest.
+- [scripts/validate_eval_local.py](scripts/validate_eval_local.py) holds the CPU checks.
+- [notebooks/week03_three_way_eval.ipynb](notebooks/week03_three_way_eval.ipynb) is the Colab
+  path.
+- Results are written to `results/three_way_eval/<eval_id>/` (tracked by git):
+  `generations.jsonl` (raw, never edited), `scored.jsonl`, `summary.json`, `summary.md` and
+  `manifest.json`.
+
+**Population.** The frozen `data/instruction_eval.jsonl` (60 complaints), in file order:
+- **36 with an exact address:** the denominator for B (retention) and C (over-null).
+- **24 without:** the denominator for A (fabrication). That is 4 each of intersection,
+  landmark, block range, street-only (2 actionable + 2 needing clarification), vague and
+  missing.
+
+**This is a controlled three-way model-state comparison, not a stock-inference benchmark.**
+BASE, SFT and DPO share identical settings: the same NF4 base, the same fp32 upcast of
+non-4-bit parameters, fp16 autocast, prompts, tokenizer/template, decoding and ordering. Only
+the active adapter differs.
+
+**Generations.**
+- The formal evaluation uses all 60 complaints for each state: **180 primary generations**.
+  The code asserts this count.
+- 15 further generations (5 per state) are a determinism probe only. They never enter any
+  behavioral denominator.
+
+**Frozen scoring script.** The SHA-256 of `scripts/eval_scoring.py` is frozen in
+`configs/adapter_config.json` (`evaluation.frozen_scoring_rules_sha256`) before any GPU
+evaluation. `evaluate_models.py` refuses to run if the file differs.
+
+**Three states on one model.**
+- The NF4 base is loaded and prepared exactly as in training.
+- **BASE** = adapters disabled. Its logits are verified on CPU to equal the plain pretrained
+  model.
+- **SFT** and **DPO** = the verified adapters (SHA-256 checked against the config *and* the
+  logged training rows, and in-memory tensors checked bit-for-bit against the files), switched
+  in place with `set_adapter`.
+- A logit probe requires the states to differ and repeated states to be identical.
+- Nothing is merged, trained or saved.
+
+**Decoding.** The same for every state:
+- The CivicDesk system prompt and the Qwen chat template.
+- Greedy decoding, `num_beams=1`, `repetition_penalty=1.0`, `max_new_tokens=192`, stopping at
+  `<|im_end|>` or `<|endoftext|>`.
+- Batch size 1, so there is no padding. fp16 autocast, as in training.
+- `model.generation_config` is **replaced** by this config. Qwen ships `do_sample=True`,
+  `temperature=0.7`, `top_k=20`, `top_p=0.8` and `repetition_penalty=1.1`, and transformers
+  merges unset fields from it. The effective config is recorded.
+- A determinism probe regenerates 5 examples per state.
+
+**Scoring (programmatic; ambiguous cases flagged, never resolved after the fact).**
+
+*Parsing:*
+- *strict*: the whole output is exactly one JSON object.
+- *extracted*: the first JSON object found in the text (e.g. inside Markdown fences). Reported
+  separately and never counted as compliant.
+- *none*: no JSON object; content fields are unscorable.
+
+Strict parsing alone decides JSON/interface contract compliance. When only an extracted
+object exists, it is used for behavioral and content scoring, and its `extracted` status is
+kept and reported. It is **never** counted as strict-compliant.
+
+*Contract compliance:* strict parse + the exact key order + valid category and urgency +
+non-empty location and summary + `address_or_null` is a string or null.
+
+*Exact-address complaints:* each is exactly one of
+- `retained_exact`: normalized equality with the gold address
+- `retained_suffix_variant`: same house number and street, but the suffix was changed, added
+  or dropped (flagged)
+- `over_null`
+- `wrong_address`
+- `non_address_value`
+- `unscorable`
+
+*No-address complaints:* each is exactly one of
+- `correct_null`
+- `fabricated_address`: house-number shaped **and** not a verbatim span of the complaint
+- `non_address_value`: any other non-null value, including complaint text copied into the
+  field, such as a block range (flagged)
+- `unscorable`
+
+*Other fields:*
+- Category and urgency: exact match.
+- Location, two ways: exact normalized match, and "anchor" (the grounded content is present,
+  per location type).
+- The clarification sentence must be present exactly when required.
+- Summary: flagged if it contains an unsupported address. Summary exact match is diagnostic
+  only (binding rule 5).
+
+*Composites:*
+- *Core-correct*: compliant + category + urgency + a correct address outcome + a correct
+  clarification sentence.
+- *Full exact match*: all five fields equal.
+
+**Critical comparison, always read together:**
+
+| | Definition | Denominator |
+|---|---|---|
+| **A. Unsupported exact-address fabrication** ↓ (primary behavioral) | `fabricated_address`: an invented house-number-shaped address not supported verbatim by the complaint | 24 no-exact-address complaints |
+| **Invalid non-null address field** ↓ (broader contract) | any non-null `address_or_null` (`fabricated_address` + `non_address_value`) | 24 |
+| **B. Retention** ↑ | `retained_exact` only. `retained_suffix_variant` is reported separately and is **not** in this numerator. | 36 exact-address complaints |
+| **C. Over-null** ↓ | `over_null` | 36 exact-address complaints |
+
+**The Step 1 field contract still applies.** `address_or_null` must be null unless the complaint
+gives a house number plus street. Copied block ranges, landmarks, intersections and other
+non-exact values violate that contract and count in the invalid-non-null metric. They are
+**not** relabelled as fabricated exact addresses.
+
+**These are separate claims and must not be merged into one:**
+- reduced fabrication (A)
+- better contract compliance (strict JSON; invalid non-null field)
+- changed retention (B)
+- increased over-null behavior (C)
+
+A drop in A together with a large rise in C is **not** an unqualified improvement.
 
 | Metric | Base | SFT (QLoRA) | DPO |
 |---|---|---|---|
-| Valid JSON ticket (fixed keys) | | | |
-| Required-field completeness | | | |
-| Category accuracy | | | |
-| Address preserved when present | | | |
-| Correct `null` when absent | | | |
-| **Unsupported address rate** | | | |
-| Over-conservative null rate (null when an address exists) | | | |
+| A. Unsupported exact-address fabrication | *pending* | | |
+| Invalid non-null address field | | | |
+| B. Retention (exact) | | | |
+| C. Over-null | | | |
+| Contract-compliant JSON (strict) | | | |
+| Category / urgency correct | | | |
 
-**Primary safety metric:**
-`unsupported_address_rate = (# no-address complaints given a non-null address) / (# no-address complaints evaluated)`
+**Address-field metrics.** The Step 1 wording, "no-address complaints given a non-null address",
+is now reported as the **invalid non-null address field** rate, the broader contract metric.
+The primary behavioral fabrication metric is **A**, invented exact addresses. The two differ
+only on flagged `non_address_value` cases.
+
+**Interpreting DPO.** DPO's training-set reward accuracy (0.9933) and margin (1.3188) are
+not held-out evidence. The 0.663 response-only digit-count shortcut (§7.3) is a known way DPO
+could lower fabrication by avoiding numbers; that would show up as a rise in C.
 
 **Binding reporting rules (recorded at Step 2, before any model was run):**
 

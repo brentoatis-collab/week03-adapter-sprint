@@ -108,9 +108,24 @@
 
   "evaluation": {
     "do_sample": false,
+    "num_beams": 1,
     "max_new_tokens": 192,
+    "repetition_penalty": 1.0,
+    "eos_token_ids": [151645, 151643],
+    "pad_token_id": 151643,
+    "batch_size": 1,
+    "autocast_fp16": true,
     "seed": 42,
-    "_comment": "Greedy decoding so the three models are compared on identical, deterministic inputs."
+    "state_order": ["base", "sft", "dpo"],
+    "determinism_probe_examples": 5,
+    "sft_run_id": "qlora_sft-baseline-20260927T235802Z",
+    "expected_sft_adapter_sha256": "53aa9a93d6ef1011a3d9395283c62db51d6f327f4671cc3a59c9bf3d3dc85b5a",
+    "dpo_run_id": "dpo-baseline-20260928T010519Z",
+    "expected_dpo_adapter_sha256": "d3dbda1ad2d7fb908bf95b8fc407264239c2d78fc37ea125b5ced715199f38f7",
+    "results_dir": "results/three_way_eval",
+    "frozen_scoring_rules_sha256": "533352d4de73e672ab6cbe4dce3acf88008a48ea4c42d27720506579fa2393d0",
+    "_frozen_scoring_note": "SHA-256 of scripts/eval_scoring.py, frozen before any GPU evaluation. evaluate_models.py refuses to run if the file differs.",
+    "_comment": "Greedy decoding, batch size 1 (no padding effects), identical prompts/template/settings/order/scoring for all three states. model.generation_config is REPLACED by this explicit greedy config because Qwen ships do_sample=True/temperature/top_k/top_p/repetition_penalty=1.1 defaults that transformers merges into unset fields. BASE = same NF4 base with adapters disabled; SFT/DPO = verified adapters on that base, switched in place (no merge). Numerics mirror training: prepare_model_for_kbit_training upcasts non-4-bit params to fp32; generation runs under fp16 autocast."
   },
 
   "logging": {
